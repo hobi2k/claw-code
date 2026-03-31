@@ -218,6 +218,35 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: "Agent",
+            description: "Launch a specialized agent task and persist its handoff metadata.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "description": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "subagent_type": { "type": "string" },
+                    "name": { "type": "string" },
+                    "model": { "type": "string" }
+                },
+                "required": ["description", "prompt"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "ToolSearch",
+            description: "Search for deferred or specialized tools by exact name or keywords.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "max_results": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -233,6 +262,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
+        "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
+        "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -288,6 +319,14 @@ fn run_todo_write(input: TodoWriteInput) -> Result<String, String> {
 
 fn run_skill(input: SkillInput) -> Result<String, String> {
     to_pretty_json(execute_skill(input)?)
+}
+
+fn run_agent(input: AgentInput) -> Result<String, String> {
+    to_pretty_json(execute_agent(input)?)
+}
+
+fn run_tool_search(input: ToolSearchInput) -> Result<String, String> {
+    to_pretty_json(execute_tool_search(input))
 }
 
 fn to_pretty_json<T: serde::Serialize>(value: T) -> Result<String, String> {
@@ -365,6 +404,21 @@ struct SkillInput {
     args: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentInput {
+    description: String,
+    prompt: String,
+    subagent_type: Option<String>,
+    name: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolSearchInput {
+    query: String,
+    max_results: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 struct WebFetchOutput {
     bytes: usize,
@@ -402,6 +456,30 @@ struct SkillOutput {
     args: Option<String>,
     description: Option<String>,
     prompt: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentOutput {
+    #[serde(rename = "agentId")]
+    agent_id: String,
+    name: String,
+    description: String,
+    #[serde(rename = "subagentType")]
+    subagent_type: Option<String>,
+    model: Option<String>,
+    status: String,
+    #[serde(rename = "outputFile")]
+    output_file: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolSearchOutput {
+    matches: Vec<String>,
+    query: String,
+    #[serde(rename = "total_deferred_tools")]
+    total_deferred_tools: usize,
+    #[serde(rename = "pending_mcp_servers")]
+    pending_mcp_servers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -896,6 +974,185 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
     Err(format!("unknown skill: {requested}"))
 }
 
+fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
+    if input.description.trim().is_empty() {
+        return Err(String::from("description must not be empty"));
+    }
+    if input.prompt.trim().is_empty() {
+        return Err(String::from("prompt must not be empty"));
+    }
+
+    let agent_id = make_agent_id();
+    let output_dir = agent_store_dir()?;
+    std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let output_file = output_dir.join(format!("{agent_id}.md"));
+    let manifest_file = output_dir.join(format!("{agent_id}.json"));
+    let agent_name = input
+        .name
+        .clone()
+        .unwrap_or_else(|| slugify_agent_name(&input.description));
+
+    let output_contents = format!(
+        "# Agent Task\n\n- id: {}\n- name: {}\n- description: {}\n- subagent_type: {}\n\n## Prompt\n\n{}\n",
+        agent_id,
+        agent_name,
+        input.description,
+        input
+            .subagent_type
+            .clone()
+            .unwrap_or_else(|| String::from("general-purpose")),
+        input.prompt
+    );
+    std::fs::write(&output_file, output_contents).map_err(|error| error.to_string())?;
+
+    let manifest = AgentOutput {
+        agent_id,
+        name: agent_name,
+        description: input.description,
+        subagent_type: input.subagent_type,
+        model: input.model,
+        status: String::from("queued"),
+        output_file: output_file.display().to_string(),
+    };
+    std::fs::write(
+        &manifest_file,
+        serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(manifest)
+}
+
+fn execute_tool_search(input: ToolSearchInput) -> ToolSearchOutput {
+    let deferred = deferred_tool_specs();
+    let max_results = input.max_results.unwrap_or(5).max(1);
+    let query = input.query.trim().to_string();
+    let matches = search_tool_specs(&query, max_results, &deferred);
+
+    ToolSearchOutput {
+        matches,
+        query,
+        total_deferred_tools: deferred.len(),
+        pending_mcp_servers: None,
+    }
+}
+
+fn deferred_tool_specs() -> Vec<ToolSpec> {
+    mvp_tool_specs()
+        .into_iter()
+        .filter(|spec| {
+            !matches!(
+                spec.name,
+                "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search"
+            )
+        })
+        .collect()
+}
+
+fn search_tool_specs(query: &str, max_results: usize, specs: &[ToolSpec]) -> Vec<String> {
+    let lowered = query.to_lowercase();
+    if let Some(selection) = lowered.strip_prefix("select:") {
+        return selection
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .filter_map(|wanted| {
+                specs
+                    .iter()
+                    .find(|spec| spec.name.eq_ignore_ascii_case(wanted))
+                    .map(|spec| spec.name.to_string())
+            })
+            .take(max_results)
+            .collect();
+    }
+
+    let mut required = Vec::new();
+    let mut optional = Vec::new();
+    for term in lowered.split_whitespace() {
+        if let Some(rest) = term.strip_prefix('+') {
+            if !rest.is_empty() {
+                required.push(rest);
+            }
+        } else {
+            optional.push(term);
+        }
+    }
+    let terms = if required.is_empty() {
+        optional.clone()
+    } else {
+        required.iter().chain(optional.iter()).copied().collect()
+    };
+
+    let mut scored = specs
+        .iter()
+        .filter_map(|spec| {
+            let name = spec.name.to_lowercase();
+            let haystack = format!("{name} {}", spec.description.to_lowercase());
+            if required.iter().any(|term| !haystack.contains(term)) {
+                return None;
+            }
+
+            let mut score = 0_i32;
+            for term in &terms {
+                if haystack.contains(term) {
+                    score += 2;
+                }
+                if name == *term {
+                    score += 8;
+                }
+                if name.contains(term) {
+                    score += 4;
+                }
+            }
+
+            if score == 0 && !lowered.is_empty() {
+                return None;
+            }
+            Some((score, spec.name.to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|left, right| right.cmp(left));
+    scored
+        .into_iter()
+        .map(|(_, name)| name)
+        .take(max_results)
+        .collect()
+}
+
+fn agent_store_dir() -> Result<std::path::PathBuf, String> {
+    if let Ok(path) = std::env::var("CLAWD_AGENT_STORE") {
+        return Ok(std::path::PathBuf::from(path));
+    }
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    Ok(cwd.join(".clawd-agents"))
+}
+
+fn make_agent_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("agent-{nanos}")
+}
+
+fn slugify_agent_name(description: &str) -> String {
+    let mut out = description
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    out.trim_matches('-').chars().take(32).collect()
+}
+
 fn parse_skill_description(contents: &str) -> Option<String> {
     for line in contents.lines() {
         if let Some(value) = line.strip_prefix("description:") {
@@ -929,6 +1186,10 @@ mod tests {
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"WebFetch"));
         assert!(names.contains(&"WebSearch"));
+        assert!(names.contains(&"TodoWrite"));
+        assert!(names.contains(&"Skill"));
+        assert!(names.contains(&"Agent"));
+        assert!(names.contains(&"ToolSearch"));
     }
 
     #[test]
@@ -1080,6 +1341,59 @@ mod tests {
             .as_str()
             .expect("prompt")
             .contains("Guide on using oh-my-codex plugin"));
+    }
+
+    #[test]
+    fn tool_search_supports_keyword_and_select_queries() {
+        let keyword = execute_tool(
+            "ToolSearch",
+            &json!({"query": "web current", "max_results": 3}),
+        )
+        .expect("ToolSearch should succeed");
+        let keyword_output: serde_json::Value = serde_json::from_str(&keyword).expect("valid json");
+        let matches = keyword_output["matches"].as_array().expect("matches");
+        assert!(matches.iter().any(|value| value == "WebSearch"));
+
+        let selected = execute_tool("ToolSearch", &json!({"query": "select:Agent,Skill"}))
+            .expect("ToolSearch should succeed");
+        let selected_output: serde_json::Value =
+            serde_json::from_str(&selected).expect("valid json");
+        assert_eq!(selected_output["matches"][0], "Agent");
+        assert_eq!(selected_output["matches"][1], "Skill");
+    }
+
+    #[test]
+    fn agent_persists_handoff_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "clawd-agent-store-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::env::set_var("CLAWD_AGENT_STORE", &dir);
+
+        let result = execute_tool(
+            "Agent",
+            &json!({
+                "description": "Audit the branch",
+                "prompt": "Check tests and outstanding work.",
+                "subagent_type": "Explore",
+                "name": "ship-audit"
+            }),
+        )
+        .expect("Agent should succeed");
+        std::env::remove_var("CLAWD_AGENT_STORE");
+
+        let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        assert_eq!(output["name"], "ship-audit");
+        assert_eq!(output["subagentType"], "Explore");
+        assert_eq!(output["status"], "queued");
+        let output_file = output["outputFile"].as_str().expect("output file");
+        let contents = std::fs::read_to_string(output_file).expect("agent file exists");
+        assert!(contents.contains("Audit the branch"));
+        assert!(contents.contains("Check tests and outstanding work."));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     struct TestServer {
