@@ -8,13 +8,15 @@ use api::{
     MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
-use plugins::PluginTool;
+use plugins::{
+    load_plugin_from_directory, PluginManager, PluginManagerConfig, PluginSummary, PluginTool,
+};
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file, write_file,
-    ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock, ConversationMessage,
-    ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode, PermissionPolicy,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ConfigLoader, ContentBlock,
+    ConversationMessage, ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode,
+    PermissionPolicy, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -91,7 +93,10 @@ impl GlobalToolRegistry {
         Ok(Self { plugin_tools })
     }
 
-    pub fn normalize_allowed_tools(&self, values: &[String]) -> Result<Option<BTreeSet<String>>, String> {
+    pub fn normalize_allowed_tools(
+        &self,
+        values: &[String],
+    ) -> Result<Option<BTreeSet<String>>, String> {
         if values.is_empty() {
             return Ok(None);
         }
@@ -100,7 +105,11 @@ impl GlobalToolRegistry {
         let canonical_names = builtin_specs
             .iter()
             .map(|spec| spec.name.to_string())
-            .chain(self.plugin_tools.iter().map(|tool| tool.definition().name.clone()))
+            .chain(
+                self.plugin_tools
+                    .iter()
+                    .map(|tool| tool.definition().name.clone()),
+            )
             .collect::<Vec<_>>();
         let mut name_map = canonical_names
             .iter()
@@ -151,7 +160,8 @@ impl GlobalToolRegistry {
             .plugin_tools
             .iter()
             .filter(|tool| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+                allowed_tools
+                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
             })
             .map(|tool| ToolDefinition {
                 name: tool.definition().name.clone(),
@@ -174,7 +184,8 @@ impl GlobalToolRegistry {
             .plugin_tools
             .iter()
             .filter(|tool| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+                allowed_tools
+                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
             })
             .map(|tool| {
                 (
@@ -1454,48 +1465,391 @@ fn todo_store_path() -> Result<std::path::PathBuf, String> {
     Ok(cwd.join(".claw-todos.json"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillRootKind {
+    Skills,
+    LegacyCommands,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillCandidate {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillCandidateRoot {
+    path: PathBuf,
+    kind: SkillRootKind,
+    name_prefix: Option<String>,
+}
+
 fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
     let requested = skill.trim().trim_start_matches('/').trim_start_matches('$');
     if requested.is_empty() {
         return Err(String::from("skill must not be empty"));
     }
 
+    let candidates = discover_skill_candidates().map_err(|error| error.to_string())?;
+
+    if let Some(candidate) = candidates
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(requested))
+    {
+        return Ok(candidate.path.clone());
+    }
+
+    let suffix = format!(":{requested}");
+    let suffix_matches = candidates
+        .iter()
+        .filter(|candidate| candidate.name.ends_with(&suffix))
+        .collect::<Vec<_>>();
+    match suffix_matches.as_slice() {
+        [candidate] => Ok(candidate.path.clone()),
+        [] => Err(format!("unknown skill: {requested}")),
+        matches => Err(format!(
+            "ambiguous skill `{requested}`; use one of: {}",
+            matches
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+fn discover_skill_candidates() -> std::io::Result<Vec<SkillCandidate>> {
+    let cwd = std::env::current_dir()?;
+    let mut roots = local_skill_candidate_roots(&cwd);
+    extend_plugin_skill_candidate_roots(&cwd, &mut roots);
+
     let mut candidates = Vec::new();
+    for root in &roots {
+        collect_skill_candidates(root, &root.path, &mut candidates)?;
+    }
+    Ok(candidates)
+}
+
+fn local_skill_candidate_roots(cwd: &Path) -> Vec<SkillCandidateRoot> {
+    let mut roots = Vec::new();
+
+    for ancestor in cwd.ancestors() {
+        push_skill_candidate_root(
+            &mut roots,
+            ancestor.join(".codex").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            ancestor.join(".claw").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            ancestor.join(".codex").join("commands"),
+            SkillRootKind::LegacyCommands,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            ancestor.join(".claw").join("commands"),
+            SkillRootKind::LegacyCommands,
+            None,
+        );
+    }
+
     if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-        candidates.push(std::path::PathBuf::from(codex_home).join("skills"));
+        let codex_home = PathBuf::from(codex_home);
+        push_skill_candidate_root(
+            &mut roots,
+            codex_home.join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            codex_home.join("commands"),
+            SkillRootKind::LegacyCommands,
+            None,
+        );
     }
     if let Ok(home) = std::env::var("HOME") {
-        let home = std::path::PathBuf::from(home);
-        candidates.push(home.join(".agents").join("skills"));
-        candidates.push(home.join(".config").join("opencode").join("skills"));
-        candidates.push(home.join(".codex").join("skills"));
+        let home = PathBuf::from(home);
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".agents").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".config").join("opencode").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".codex").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".claw").join("skills"),
+            SkillRootKind::Skills,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".codex").join("commands"),
+            SkillRootKind::LegacyCommands,
+            None,
+        );
+        push_skill_candidate_root(
+            &mut roots,
+            home.join(".claw").join("commands"),
+            SkillRootKind::LegacyCommands,
+            None,
+        );
     }
-    candidates.push(std::path::PathBuf::from("/home/bellman/.codex/skills"));
+    push_skill_candidate_root(
+        &mut roots,
+        PathBuf::from("/home/bellman/.codex/skills"),
+        SkillRootKind::Skills,
+        None,
+    );
 
-    for root in candidates {
-        let direct = root.join(requested).join("SKILL.md");
-        if direct.exists() {
-            return Ok(direct);
-        }
+    roots
+}
 
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let path = entry.path().join("SKILL.md");
-                if !path.exists() {
-                    continue;
-                }
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(requested)
+fn extend_plugin_skill_candidate_roots(cwd: &Path, roots: &mut Vec<SkillCandidateRoot>) {
+    for plugin in enabled_plugins_for_cwd(cwd) {
+        let Some(root) = &plugin.metadata.root else {
+            continue;
+        };
+
+        push_skill_candidate_root(
+            roots,
+            root.join("skills"),
+            SkillRootKind::Skills,
+            Some(plugin.metadata.name.clone()),
+        );
+
+        if let Ok(manifest) = load_plugin_from_directory(root) {
+            for relative in manifest.skills {
+                let path = resolve_plugin_component_path(root, &relative);
+                let kind = if path
+                    .extension()
+                    .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
                 {
-                    return Ok(path);
-                }
+                    SkillRootKind::LegacyCommands
+                } else {
+                    SkillRootKind::Skills
+                };
+                push_skill_candidate_root(roots, path, kind, Some(plugin.metadata.name.clone()));
+            }
+        }
+    }
+}
+
+fn push_skill_candidate_root(
+    roots: &mut Vec<SkillCandidateRoot>,
+    path: PathBuf,
+    kind: SkillRootKind,
+    name_prefix: Option<String>,
+) {
+    if path.exists() && !roots.iter().any(|existing| existing.path == path) {
+        roots.push(SkillCandidateRoot {
+            path,
+            kind,
+            name_prefix,
+        });
+    }
+}
+
+fn collect_skill_candidates(
+    root: &SkillCandidateRoot,
+    path: &Path,
+    candidates: &mut Vec<SkillCandidate>,
+) -> std::io::Result<()> {
+    if path.is_file() {
+        if let Some(candidate) = load_skill_candidate(root, path, &root.path)? {
+            candidates.push(candidate);
+        }
+        return Ok(());
+    }
+
+    let skill_md = path.join("SKILL.md");
+    if skill_md.is_file() {
+        if let Some(candidate) = load_skill_candidate(root, &skill_md, &root.path)? {
+            candidates.push(candidate);
+        }
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_skill_candidates(root, &entry_path, candidates)?;
+        } else if root.kind == SkillRootKind::LegacyCommands {
+            if let Some(candidate) = load_skill_candidate(root, &entry_path, &root.path)? {
+                candidates.push(candidate);
             }
         }
     }
 
-    Err(format!("unknown skill: {requested}"))
+    Ok(())
+}
+
+fn load_skill_candidate(
+    root: &SkillCandidateRoot,
+    path: &Path,
+    base_root: &Path,
+) -> std::io::Result<Option<SkillCandidate>> {
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
+    {
+        return Ok(None);
+    }
+
+    let is_skill_file = path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("SKILL.md"));
+    if root.kind == SkillRootKind::Skills && !is_skill_file {
+        return Ok(None);
+    }
+
+    let name = skill_candidate_name(root, path, base_root, is_skill_file);
+    Ok(Some(SkillCandidate {
+        name,
+        path: path.to_path_buf(),
+    }))
+}
+
+fn skill_candidate_name(
+    root: &SkillCandidateRoot,
+    path: &Path,
+    base_root: &Path,
+    is_skill_file: bool,
+) -> String {
+    let base_name = if is_skill_file {
+        path.parent().and_then(Path::file_name).map_or_else(
+            || fallback_file_stem(path),
+            |segment| segment.to_string_lossy().to_string(),
+        )
+    } else {
+        fallback_file_stem(path)
+    };
+
+    prefixed_definition_name(
+        root.name_prefix.as_deref(),
+        namespace_for_file(path, base_root, is_skill_file),
+        &base_name,
+    )
+}
+
+fn namespace_for_file(path: &Path, base_root: &Path, is_skill_file: bool) -> Option<String> {
+    let relative_parent = if is_skill_file {
+        path.parent()
+            .and_then(Path::parent)
+            .and_then(|parent| parent.strip_prefix(base_root).ok())
+    } else {
+        path.parent()
+            .and_then(|parent| parent.strip_prefix(base_root).ok())
+    }?;
+
+    let segments = relative_parent
+        .iter()
+        .map(|segment| segment.to_string_lossy())
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.to_string())
+        .collect::<Vec<_>>();
+    (!segments.is_empty()).then(|| segments.join(":"))
+}
+
+fn prefixed_definition_name(
+    prefix: Option<&str>,
+    namespace: Option<String>,
+    base_name: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(prefix) = prefix.filter(|prefix| !prefix.is_empty()) {
+        parts.push(prefix.to_string());
+    }
+    if let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) {
+        parts.push(namespace);
+    }
+    parts.push(base_name.to_string());
+    parts.join(":")
+}
+
+fn fallback_file_stem(path: &Path) -> String {
+    path.file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().to_string())
+}
+
+fn enabled_plugins_for_cwd(cwd: &Path) -> Vec<PluginSummary> {
+    let Some(manager) = plugin_manager_for_cwd(cwd) else {
+        return Vec::new();
+    };
+
+    manager
+        .list_installed_plugins()
+        .map(|plugins| {
+            plugins
+                .into_iter()
+                .filter(|plugin| plugin.enabled)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn plugin_manager_for_cwd(cwd: &Path) -> Option<PluginManager> {
+    let loader = ConfigLoader::default_for(cwd);
+    let runtime_config = loader.load().ok()?;
+    let plugin_settings = runtime_config.plugins();
+    let mut plugin_config = PluginManagerConfig::new(loader.config_home().to_path_buf());
+    plugin_config.enabled_plugins = plugin_settings.enabled_plugins().clone();
+    plugin_config.external_dirs = plugin_settings
+        .external_directories()
+        .iter()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path))
+        .collect();
+    plugin_config.install_root = plugin_settings
+        .install_root()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    plugin_config.registry_path = plugin_settings
+        .registry_path()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    plugin_config.bundled_root = plugin_settings
+        .bundled_root()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    Some(PluginManager::new(plugin_config))
+}
+
+fn resolve_plugin_path(cwd: &Path, config_home: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if value.starts_with('.') {
+        cwd.join(path)
+    } else {
+        config_home.join(path)
+    }
+}
+
+fn resolve_plugin_component_path(root: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
 }
 
 const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
@@ -3092,6 +3446,27 @@ mod tests {
         std::env::temp_dir().join(format!("claw-tools-{unique}-{name}"))
     }
 
+    fn write_skill(root: &std::path::Path, name: &str, description: &str) {
+        let skill_root = root.join(name);
+        fs::create_dir_all(&skill_root).expect("skill root");
+        fs::write(
+            skill_root.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n"),
+        )
+        .expect("write skill");
+    }
+
+    fn write_plugin_manifest(root: &std::path::Path, name: &str, extra_fields: &str) {
+        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
+        fs::write(
+            root.join(".claw-plugin").join("plugin.json"),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"description\": \"test plugin\"{extra_fields}\n}}"
+            ),
+        )
+        .expect("write plugin manifest");
+    }
+
     #[test]
     fn exposes_mvp_tools() {
         let names = mvp_tool_specs()
@@ -3486,6 +3861,103 @@ mod tests {
             .as_str()
             .expect("path")
             .ends_with("/help/SKILL.md"));
+    }
+
+    #[test]
+    fn skill_resolves_namespaced_plugin_skill_by_unique_suffix() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let workspace = temp_path("skill-plugin-workspace");
+        let config_home = temp_path("skill-plugin-home");
+        let install_root = config_home.join("plugins").join("installed");
+        let plugin_root = install_root.join("demo-plugin");
+
+        fs::create_dir_all(&config_home).expect("config home");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{"plugins":{"enabled":{"demo-plugin@external":true}}}"#,
+        )
+        .expect("write settings");
+        write_plugin_manifest(&plugin_root, "demo-plugin", ",\n  \"defaultEnabled\": true");
+        write_skill(
+            &plugin_root.join("skills").join("ops"),
+            "review",
+            "Plugin review guidance",
+        );
+        fs::create_dir_all(&workspace).expect("workspace");
+
+        let previous_cwd = std::env::current_dir().expect("cwd");
+        let previous_claw_config_home = std::env::var_os("CLAW_CONFIG_HOME");
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_current_dir(&workspace).expect("set cwd");
+
+        let result = execute_tool("Skill", &json!({ "skill": "review" }))
+            .expect("plugin skill should resolve");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        let expected_path = plugin_root
+            .join("skills/ops/review/SKILL.md")
+            .display()
+            .to_string();
+        assert_eq!(output["path"].as_str(), Some(expected_path.as_str()));
+
+        std::env::set_current_dir(previous_cwd).expect("restore cwd");
+        if let Some(value) = previous_claw_config_home {
+            std::env::set_var("CLAW_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("CLAW_CONFIG_HOME");
+        }
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn skill_reports_ambiguous_bare_name_for_multiple_namespaced_matches() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let workspace = temp_path("skill-ambiguous-workspace");
+        let config_home = temp_path("skill-ambiguous-home");
+        let install_root = config_home.join("plugins").join("installed");
+        let plugin_root = install_root.join("demo-plugin");
+
+        fs::create_dir_all(&config_home).expect("config home");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{"plugins":{"enabled":{"demo-plugin@external":true}}}"#,
+        )
+        .expect("write settings");
+        write_skill(
+            &workspace.join(".codex").join("skills").join("ops"),
+            "review",
+            "Local review",
+        );
+        write_plugin_manifest(&plugin_root, "demo-plugin", ",\n  \"defaultEnabled\": true");
+        write_skill(
+            &plugin_root.join("skills").join("ops"),
+            "review",
+            "Plugin review guidance",
+        );
+
+        let previous_cwd = std::env::current_dir().expect("cwd");
+        let previous_claw_config_home = std::env::var_os("CLAW_CONFIG_HOME");
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_current_dir(&workspace).expect("set cwd");
+
+        let error = execute_tool("Skill", &json!({ "skill": "review" }))
+            .expect_err("review should be ambiguous");
+        assert!(error.contains("ambiguous skill `review`"));
+        assert!(error.contains("ops:review"));
+        assert!(error.contains("demo-plugin:ops:review"));
+
+        std::env::set_current_dir(previous_cwd).expect("restore cwd");
+        if let Some(value) = previous_claw_config_home {
+            std::env::set_var("CLAW_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("CLAW_CONFIG_HOME");
+        }
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(config_home);
     }
 
     #[test]

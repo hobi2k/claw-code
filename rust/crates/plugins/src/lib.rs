@@ -119,6 +119,10 @@ pub struct PluginManifest {
     pub tools: Vec<PluginToolManifest>,
     #[serde(default)]
     pub commands: Vec<PluginCommandManifest>,
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -228,6 +232,10 @@ struct RawPluginManifest {
     pub tools: Vec<RawPluginToolManifest>,
     #[serde(default)]
     pub commands: Vec<PluginCommandManifest>,
+    #[serde(default, deserialize_with = "deserialize_string_list")]
+    pub agents: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_list")]
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,6 +252,24 @@ struct RawPluginToolManifest {
         default = "default_tool_permission_label"
     )]
     pub required_permission: String,
+}
+
+fn deserialize_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringList {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match Option::<StringList>::deserialize(deserializer)? {
+        Some(StringList::One(value)) => vec![value],
+        Some(StringList::Many(values)) => values,
+        None => Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1461,6 +1487,8 @@ fn build_plugin_manifest(
         "lifecycle command",
         &mut errors,
     );
+    let agents = build_manifest_paths(root, raw.agents, "agent", &mut errors);
+    let skills = build_manifest_paths(root, raw.skills, "skill", &mut errors);
     let tools = build_manifest_tools(root, raw.tools, &mut errors);
     let commands = build_manifest_commands(root, raw.commands, &mut errors);
 
@@ -1478,6 +1506,8 @@ fn build_plugin_manifest(
         lifecycle: raw.lifecycle,
         tools,
         commands,
+        agents,
+        skills,
     })
 }
 
@@ -1588,6 +1618,47 @@ fn build_manifest_tools(
             args: tool.args,
             required_permission,
         });
+    }
+
+    validated
+}
+
+fn build_manifest_paths(
+    root: &Path,
+    paths: Vec<String>,
+    kind: &'static str,
+    errors: &mut Vec<PluginManifestValidationError>,
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut validated = Vec::new();
+
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            errors.push(PluginManifestValidationError::EmptyEntryField {
+                kind,
+                field: "path",
+                name: None,
+            });
+            continue;
+        }
+
+        let resolved = if Path::new(trimmed).is_absolute() {
+            PathBuf::from(trimmed)
+        } else {
+            root.join(trimmed)
+        };
+        if !resolved.exists() {
+            errors.push(PluginManifestValidationError::MissingPath {
+                kind,
+                path: resolved,
+            });
+            continue;
+        }
+
+        if seen.insert(trimmed.to_string()) {
+            validated.push(trimmed.to_string());
+        }
     }
 
     validated
@@ -2223,6 +2294,38 @@ mod tests {
         assert_eq!(manifest.name, "packaged-demo");
         assert!(manifest.tools.is_empty());
         assert!(manifest.commands.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_plugin_from_directory_parses_agent_and_skill_paths() {
+        let root = temp_dir("manifest-component-paths");
+        write_file(
+            root.join("agents").join("ops").join("triage.md").as_path(),
+            "---\nname: triage\ndescription: triage agent\n---\n",
+        );
+        write_file(
+            root.join("skills")
+                .join("review")
+                .join("SKILL.md")
+                .as_path(),
+            "---\nname: review\ndescription: review skill\n---\n",
+        );
+        write_file(
+            root.join(MANIFEST_FILE_NAME).as_path(),
+            r#"{
+  "name": "component-paths",
+  "version": "1.0.0",
+  "description": "Manifest component paths",
+  "agents": "./agents/ops/triage.md",
+  "skills": ["./skills"]
+}"#,
+        );
+
+        let manifest = load_plugin_from_directory(&root).expect("manifest should load");
+        assert_eq!(manifest.agents, vec!["./agents/ops/triage.md"]);
+        assert_eq!(manifest.skills, vec!["./skills"]);
 
         let _ = fs::remove_dir_all(root);
     }

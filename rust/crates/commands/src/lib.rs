@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use plugins::{PluginError, PluginManager, PluginSummary};
-use runtime::{compact_session, CompactionConfig, Session};
+use plugins::{
+    load_plugin_from_directory, PluginError, PluginManager, PluginManagerConfig, PluginSummary,
+};
+use runtime::{compact_session, CompactionConfig, ConfigLoader, Session};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
@@ -631,6 +633,7 @@ enum DefinitionSource {
     UserCodexHome,
     UserCodex,
     UserClaw,
+    Plugin,
 }
 
 impl DefinitionSource {
@@ -641,6 +644,7 @@ impl DefinitionSource {
             Self::UserCodexHome => "User ($CODEX_HOME)",
             Self::UserCodex => "User (~/.codex)",
             Self::UserClaw => "User (~/.claw)",
+            Self::Plugin => "Plugins",
         }
     }
 }
@@ -684,6 +688,14 @@ struct SkillRoot {
     source: DefinitionSource,
     path: PathBuf,
     origin: SkillOrigin,
+    name_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentRoot {
+    source: DefinitionSource,
+    path: PathBuf,
+    name_prefix: Option<String>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -801,7 +813,7 @@ pub fn handle_plugins_slash_command(
 pub fn handle_agents_slash_command(args: Option<&str>, cwd: &Path) -> std::io::Result<String> {
     match normalize_optional_args(args) {
         None | Some("list") => {
-            let roots = discover_definition_roots(cwd, "agents");
+            let roots = discover_agent_roots(cwd);
             let agents = load_agents_from_roots(&roots)?;
             Ok(render_agents_report(&agents))
         }
@@ -1301,6 +1313,20 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
     roots
 }
 
+fn discover_agent_roots(cwd: &Path) -> Vec<AgentRoot> {
+    let mut roots = discover_definition_roots(cwd, "agents")
+        .into_iter()
+        .map(|(source, path)| AgentRoot {
+            source,
+            path,
+            name_prefix: None,
+        })
+        .collect::<Vec<_>>();
+
+    extend_plugin_agent_roots(cwd, &mut roots);
+    roots
+}
+
 fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
@@ -1310,24 +1336,28 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
             DefinitionSource::ProjectCodex,
             ancestor.join(".codex").join("skills"),
             SkillOrigin::SkillsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::ProjectClaw,
             ancestor.join(".claw").join("skills"),
             SkillOrigin::SkillsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::ProjectCodex,
             ancestor.join(".codex").join("commands"),
             SkillOrigin::LegacyCommandsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::ProjectClaw,
             ancestor.join(".claw").join("commands"),
             SkillOrigin::LegacyCommandsDir,
+            None,
         );
     }
 
@@ -1338,12 +1368,14 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
             DefinitionSource::UserCodexHome,
             codex_home.join("skills"),
             SkillOrigin::SkillsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserCodexHome,
             codex_home.join("commands"),
             SkillOrigin::LegacyCommandsDir,
+            None,
         );
     }
 
@@ -1354,27 +1386,32 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
             DefinitionSource::UserCodex,
             home.join(".codex").join("skills"),
             SkillOrigin::SkillsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserCodex,
             home.join(".codex").join("commands"),
             SkillOrigin::LegacyCommandsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserClaw,
             home.join(".claw").join("skills"),
             SkillOrigin::SkillsDir,
+            None,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserClaw,
             home.join(".claw").join("commands"),
             SkillOrigin::LegacyCommandsDir,
+            None,
         );
     }
 
+    extend_plugin_skill_roots(cwd, &mut roots);
     roots
 }
 
@@ -1393,43 +1430,162 @@ fn push_unique_skill_root(
     source: DefinitionSource,
     path: PathBuf,
     origin: SkillOrigin,
+    name_prefix: Option<String>,
 ) {
-    if path.is_dir() && !roots.iter().any(|existing| existing.path == path) {
+    if path.exists() && !roots.iter().any(|existing| existing.path == path) {
         roots.push(SkillRoot {
             source,
             path,
             origin,
+            name_prefix,
         });
     }
 }
 
-fn load_agents_from_roots(
-    roots: &[(DefinitionSource, PathBuf)],
-) -> std::io::Result<Vec<AgentSummary>> {
+fn push_unique_agent_root(
+    roots: &mut Vec<AgentRoot>,
+    source: DefinitionSource,
+    path: PathBuf,
+    name_prefix: Option<String>,
+) {
+    if path.exists() && !roots.iter().any(|existing| existing.path == path) {
+        roots.push(AgentRoot {
+            source,
+            path,
+            name_prefix,
+        });
+    }
+}
+
+fn extend_plugin_agent_roots(cwd: &Path, roots: &mut Vec<AgentRoot>) {
+    for plugin in enabled_plugins_for_cwd(cwd) {
+        let Some(root) = &plugin.metadata.root else {
+            continue;
+        };
+
+        push_unique_agent_root(
+            roots,
+            DefinitionSource::Plugin,
+            root.join("agents"),
+            Some(plugin.metadata.name.clone()),
+        );
+
+        if let Ok(manifest) = load_plugin_from_directory(root) {
+            for relative in manifest.agents {
+                push_unique_agent_root(
+                    roots,
+                    DefinitionSource::Plugin,
+                    resolve_plugin_component_path(root, &relative),
+                    Some(plugin.metadata.name.clone()),
+                );
+            }
+        }
+    }
+}
+
+fn extend_plugin_skill_roots(cwd: &Path, roots: &mut Vec<SkillRoot>) {
+    for plugin in enabled_plugins_for_cwd(cwd) {
+        let Some(root) = &plugin.metadata.root else {
+            continue;
+        };
+
+        push_unique_skill_root(
+            roots,
+            DefinitionSource::Plugin,
+            root.join("skills"),
+            SkillOrigin::SkillsDir,
+            Some(plugin.metadata.name.clone()),
+        );
+
+        if let Ok(manifest) = load_plugin_from_directory(root) {
+            for relative in manifest.skills {
+                let path = resolve_plugin_component_path(root, &relative);
+                let origin = if path
+                    .extension()
+                    .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
+                {
+                    SkillOrigin::LegacyCommandsDir
+                } else {
+                    SkillOrigin::SkillsDir
+                };
+                push_unique_skill_root(
+                    roots,
+                    DefinitionSource::Plugin,
+                    path,
+                    origin,
+                    Some(plugin.metadata.name.clone()),
+                );
+            }
+        }
+    }
+}
+
+fn enabled_plugins_for_cwd(cwd: &Path) -> Vec<PluginSummary> {
+    let Some(manager) = plugin_manager_for_cwd(cwd) else {
+        return Vec::new();
+    };
+
+    manager
+        .list_installed_plugins()
+        .map(|plugins| {
+            plugins
+                .into_iter()
+                .filter(|plugin| plugin.enabled)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn plugin_manager_for_cwd(cwd: &Path) -> Option<PluginManager> {
+    let loader = ConfigLoader::default_for(cwd);
+    let runtime_config = loader.load().ok()?;
+    let plugin_settings = runtime_config.plugins();
+    let mut plugin_config = PluginManagerConfig::new(loader.config_home().to_path_buf());
+    plugin_config.enabled_plugins = plugin_settings.enabled_plugins().clone();
+    plugin_config.external_dirs = plugin_settings
+        .external_directories()
+        .iter()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path))
+        .collect();
+    plugin_config.install_root = plugin_settings
+        .install_root()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    plugin_config.registry_path = plugin_settings
+        .registry_path()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    plugin_config.bundled_root = plugin_settings
+        .bundled_root()
+        .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));
+    Some(PluginManager::new(plugin_config))
+}
+
+fn resolve_plugin_path(cwd: &Path, config_home: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if value.starts_with('.') {
+        cwd.join(path)
+    } else {
+        config_home.join(path)
+    }
+}
+
+fn resolve_plugin_component_path(root: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn load_agents_from_roots(roots: &[AgentRoot]) -> std::io::Result<Vec<AgentSummary>> {
     let mut agents = Vec::new();
     let mut active_sources = BTreeMap::<String, DefinitionSource>::new();
 
-    for (source, root) in roots {
+    for root in roots {
         let mut root_agents = Vec::new();
-        for entry in fs::read_dir(root)? {
-            let entry = entry?;
-            if entry.path().extension().is_none_or(|ext| ext != "toml") {
-                continue;
-            }
-            let contents = fs::read_to_string(entry.path())?;
-            let fallback_name = entry.path().file_stem().map_or_else(
-                || entry.file_name().to_string_lossy().to_string(),
-                |stem| stem.to_string_lossy().to_string(),
-            );
-            root_agents.push(AgentSummary {
-                name: parse_toml_string(&contents, "name").unwrap_or(fallback_name),
-                description: parse_toml_string(&contents, "description"),
-                model: parse_toml_string(&contents, "model"),
-                reasoning_effort: parse_toml_string(&contents, "model_reasoning_effort"),
-                source: *source,
-                shadowed_by: None,
-            });
-        }
+        collect_agents(root, &root.path, &mut root_agents)?;
         root_agents.sort_by(|left, right| left.name.cmp(&right.name));
 
         for mut agent in root_agents {
@@ -1452,61 +1608,7 @@ fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSumma
 
     for root in roots {
         let mut root_skills = Vec::new();
-        for entry in fs::read_dir(&root.path)? {
-            let entry = entry?;
-            match root.origin {
-                SkillOrigin::SkillsDir => {
-                    if !entry.path().is_dir() {
-                        continue;
-                    }
-                    let skill_path = entry.path().join("SKILL.md");
-                    if !skill_path.is_file() {
-                        continue;
-                    }
-                    let contents = fs::read_to_string(skill_path)?;
-                    let (name, description) = parse_skill_frontmatter(&contents);
-                    root_skills.push(SkillSummary {
-                        name: name
-                            .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string()),
-                        description,
-                        source: root.source,
-                        shadowed_by: None,
-                        origin: root.origin,
-                    });
-                }
-                SkillOrigin::LegacyCommandsDir => {
-                    let path = entry.path();
-                    let markdown_path = if path.is_dir() {
-                        let skill_path = path.join("SKILL.md");
-                        if !skill_path.is_file() {
-                            continue;
-                        }
-                        skill_path
-                    } else if path
-                        .extension()
-                        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
-                    {
-                        path
-                    } else {
-                        continue;
-                    };
-
-                    let contents = fs::read_to_string(&markdown_path)?;
-                    let fallback_name = markdown_path.file_stem().map_or_else(
-                        || entry.file_name().to_string_lossy().to_string(),
-                        |stem| stem.to_string_lossy().to_string(),
-                    );
-                    let (name, description) = parse_skill_frontmatter(&contents);
-                    root_skills.push(SkillSummary {
-                        name: name.unwrap_or(fallback_name),
-                        description,
-                        source: root.source,
-                        shadowed_by: None,
-                        origin: root.origin,
-                    });
-                }
-            }
-        }
+        collect_skills(root, &root.path, &mut root_skills)?;
         root_skills.sort_by(|left, right| left.name.cmp(&right.name));
 
         for mut skill in root_skills {
@@ -1521,6 +1623,205 @@ fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSumma
     }
 
     Ok(skills)
+}
+
+fn collect_agents(
+    root: &AgentRoot,
+    path: &Path,
+    agents: &mut Vec<AgentSummary>,
+) -> std::io::Result<()> {
+    if path.is_file() {
+        if let Some(agent) = load_agent_summary(path, &root.path, root)? {
+            agents.push(agent);
+        }
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_agents(root, &entry_path, agents)?;
+        } else if let Some(agent) = load_agent_summary(&entry_path, &root.path, root)? {
+            agents.push(agent);
+        }
+    }
+
+    Ok(())
+}
+
+fn load_agent_summary(
+    path: &Path,
+    base_root: &Path,
+    root: &AgentRoot,
+) -> std::io::Result<Option<AgentSummary>> {
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase());
+    let Some(extension) = extension else {
+        return Ok(None);
+    };
+    if extension != "toml" && extension != "md" {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let base_name = if extension == "toml" {
+        parse_toml_string(&contents, "name").unwrap_or_else(|| fallback_file_stem(path))
+    } else {
+        let (name, _) = parse_skill_frontmatter(&contents);
+        name.unwrap_or_else(|| fallback_file_stem(path))
+    };
+    let description = if extension == "toml" {
+        parse_toml_string(&contents, "description")
+    } else {
+        let (_, description) = parse_skill_frontmatter(&contents);
+        description
+    };
+    let model = if extension == "toml" {
+        parse_toml_string(&contents, "model")
+    } else {
+        parse_frontmatter_key(&contents, "model")
+    };
+    let reasoning_effort = if extension == "toml" {
+        parse_toml_string(&contents, "model_reasoning_effort")
+    } else {
+        parse_frontmatter_key(&contents, "effort")
+    };
+
+    Ok(Some(AgentSummary {
+        name: prefixed_definition_name(
+            root.name_prefix.as_deref(),
+            namespace_for_file(path, base_root, false),
+            &base_name,
+        ),
+        description,
+        model,
+        reasoning_effort,
+        source: root.source,
+        shadowed_by: None,
+    }))
+}
+
+fn collect_skills(
+    root: &SkillRoot,
+    path: &Path,
+    skills: &mut Vec<SkillSummary>,
+) -> std::io::Result<()> {
+    if path.is_file() {
+        if let Some(skill) = load_skill_summary(path, &root.path, root)? {
+            skills.push(skill);
+        }
+        return Ok(());
+    }
+
+    let skill_md_path = path.join("SKILL.md");
+    if skill_md_path.is_file() {
+        if let Some(skill) = load_skill_summary(&skill_md_path, &root.path, root)? {
+            skills.push(skill);
+        }
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_skills(root, &entry_path, skills)?;
+        } else if root.origin == SkillOrigin::LegacyCommandsDir {
+            if let Some(skill) = load_skill_summary(&entry_path, &root.path, root)? {
+                skills.push(skill);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn load_skill_summary(
+    path: &Path,
+    base_root: &Path,
+    root: &SkillRoot,
+) -> std::io::Result<Option<SkillSummary>> {
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
+    {
+        return Ok(None);
+    }
+
+    let is_skill_file = path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("SKILL.md"));
+    if root.origin == SkillOrigin::SkillsDir && !is_skill_file {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let (name, description) = parse_skill_frontmatter(&contents);
+    let base_name = if is_skill_file {
+        path.parent().and_then(Path::file_name).map_or_else(
+            || fallback_file_stem(path),
+            |name| name.to_string_lossy().to_string(),
+        )
+    } else {
+        fallback_file_stem(path)
+    };
+    let namespace = namespace_for_file(path, base_root, is_skill_file);
+
+    Ok(Some(SkillSummary {
+        name: prefixed_definition_name(
+            root.name_prefix.as_deref(),
+            namespace,
+            &name.unwrap_or(base_name),
+        ),
+        description,
+        source: root.source,
+        shadowed_by: None,
+        origin: root.origin,
+    }))
+}
+
+fn namespace_for_file(path: &Path, base_root: &Path, is_skill_file: bool) -> Option<String> {
+    let relative_parent = if is_skill_file {
+        path.parent()
+            .and_then(Path::parent)
+            .and_then(|parent| parent.strip_prefix(base_root).ok())
+    } else {
+        path.parent()
+            .and_then(|parent| parent.strip_prefix(base_root).ok())
+    }?;
+
+    let segments = relative_parent
+        .iter()
+        .map(|segment| segment.to_string_lossy())
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.to_string())
+        .collect::<Vec<_>>();
+    (!segments.is_empty()).then(|| segments.join(":"))
+}
+
+fn prefixed_definition_name(
+    prefix: Option<&str>,
+    namespace: Option<String>,
+    base_name: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(prefix) = prefix.filter(|prefix| !prefix.is_empty()) {
+        parts.push(prefix.to_string());
+    }
+    if let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) {
+        parts.push(namespace);
+    }
+    parts.push(base_name.to_string());
+    parts.join(":")
+}
+
+fn fallback_file_stem(path: &Path) -> String {
+    path.file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().to_string())
 }
 
 fn parse_toml_string(contents: &str, key: &str) -> Option<String> {
@@ -1548,34 +1849,32 @@ fn parse_toml_string(contents: &str, key: &str) -> Option<String> {
 }
 
 fn parse_skill_frontmatter(contents: &str) -> (Option<String>, Option<String>) {
+    (
+        parse_frontmatter_key(contents, "name"),
+        parse_frontmatter_key(contents, "description"),
+    )
+}
+
+fn parse_frontmatter_key(contents: &str, key: &str) -> Option<String> {
     let mut lines = contents.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return (None, None);
+        return None;
     }
 
-    let mut name = None;
-    let mut description = None;
     for line in lines {
         let trimmed = line.trim();
         if trimmed == "---" {
             break;
         }
-        if let Some(value) = trimmed.strip_prefix("name:") {
+        if let Some(value) = trimmed.strip_prefix(&format!("{key}:")) {
             let value = unquote_frontmatter_value(value.trim());
             if !value.is_empty() {
-                name = Some(value);
-            }
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("description:") {
-            let value = unquote_frontmatter_value(value.trim());
-            if !value.is_empty() {
-                description = Some(value);
+                return Some(value);
             }
         }
     }
 
-    (name, description)
+    None
 }
 
 fn unquote_frontmatter_value(value: &str) -> String {
@@ -1613,6 +1912,7 @@ fn render_agents_report(agents: &[AgentSummary]) -> String {
         DefinitionSource::UserCodexHome,
         DefinitionSource::UserCodex,
         DefinitionSource::UserClaw,
+        DefinitionSource::Plugin,
     ] {
         let group = agents
             .iter()
@@ -1671,6 +1971,7 @@ fn render_skills_report(skills: &[SkillSummary]) -> String {
         DefinitionSource::UserCodexHome,
         DefinitionSource::UserCodex,
         DefinitionSource::UserClaw,
+        DefinitionSource::Plugin,
     ] {
         let group = skills
             .iter()
@@ -1710,7 +2011,8 @@ fn render_agents_usage(unexpected: Option<&str>) -> String {
         "Agents".to_string(),
         "  Usage            /agents".to_string(),
         "  Direct CLI       claw agents".to_string(),
-        "  Sources          .codex/agents, .claw/agents, $CODEX_HOME/agents".to_string(),
+        "  Sources          .codex/agents, .claw/agents, $CODEX_HOME/agents, enabled plugin agents"
+            .to_string(),
     ];
     if let Some(args) = unexpected {
         lines.push(format!("  Unexpected       {args}"));
@@ -1723,7 +2025,8 @@ fn render_skills_usage(unexpected: Option<&str>) -> String {
         "Skills".to_string(),
         "  Usage            /skills".to_string(),
         "  Direct CLI       claw skills".to_string(),
-        "  Sources          .codex/skills, .claw/skills, legacy /commands".to_string(),
+        "  Sources          .codex/skills, .claw/skills, legacy /commands, enabled plugin skills"
+            .to_string(),
     ];
     if let Some(args) = unexpected {
         lines.push(format!("  Unexpected       {args}"));
@@ -1795,8 +2098,8 @@ mod tests {
         handle_worktree_slash_command, load_agents_from_roots, load_skills_from_roots,
         render_agents_report, render_plugins_report, render_skills_report,
         render_slash_command_help, resume_supported_slash_commands, slash_command_specs,
-        suggest_slash_commands, CommitPushPrRequest, DefinitionSource, SkillOrigin, SkillRoot,
-        SlashCommand,
+        suggest_slash_commands, AgentRoot, CommitPushPrRequest, DefinitionSource, SkillOrigin,
+        SkillRoot, SlashCommand,
     };
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{CompactionConfig, ContentBlock, ConversationMessage, MessageRole, Session};
@@ -1935,6 +2238,17 @@ mod tests {
             ),
         )
         .expect("write agent");
+    }
+
+    fn write_markdown_agent(root: &Path, name: &str, description: &str, model: &str, effort: &str) {
+        fs::create_dir_all(root).expect("agent root");
+        fs::write(
+            root.join(format!("{name}.md")),
+            format!(
+                "---\nname: {name}\ndescription: {description}\nmodel: {model}\neffort: {effort}\n---\n\n# {name}\n"
+            ),
+        )
+        .expect("write markdown agent");
     }
 
     fn write_skill(root: &Path, name: &str, description: &str) {
@@ -2336,8 +2650,16 @@ mod tests {
         );
 
         let roots = vec![
-            (DefinitionSource::ProjectCodex, project_agents),
-            (DefinitionSource::UserCodex, user_agents),
+            AgentRoot {
+                source: DefinitionSource::ProjectCodex,
+                path: project_agents,
+                name_prefix: None,
+            },
+            AgentRoot {
+                source: DefinitionSource::UserCodex,
+                path: user_agents,
+                name_prefix: None,
+            },
         ];
         let report =
             render_agents_report(&load_agents_from_roots(&roots).expect("agent roots should load"));
@@ -2372,16 +2694,19 @@ mod tests {
                 source: DefinitionSource::ProjectCodex,
                 path: project_skills,
                 origin: SkillOrigin::SkillsDir,
+                name_prefix: None,
             },
             SkillRoot {
                 source: DefinitionSource::ProjectClaw,
                 path: project_commands,
                 origin: SkillOrigin::LegacyCommandsDir,
+                name_prefix: None,
             },
             SkillRoot {
                 source: DefinitionSource::UserCodex,
                 path: user_skills,
                 origin: SkillOrigin::SkillsDir,
+                name_prefix: None,
             },
         ];
         let report =
@@ -2402,6 +2727,71 @@ mod tests {
     }
 
     #[test]
+    fn discovers_namespaced_local_and_plugin_skills_and_agents() {
+        let _guard = env_lock();
+        let workspace = temp_dir("plugin-discovery-workspace");
+        let config_home = temp_dir("plugin-discovery-home");
+        let plugin_source = temp_dir("plugin-discovery-source");
+
+        let nested_skill_root = workspace.join(".codex").join("skills").join("ops");
+        write_skill(&nested_skill_root, "deploy", "Nested deployment guidance");
+
+        write_external_plugin(&plugin_source, "demo-plugin", "1.0.0");
+        write_skill(
+            &plugin_source.join("skills").join("reviews"),
+            "audit",
+            "Plugin audit guidance",
+        );
+        write_markdown_agent(
+            &plugin_source.join("agents").join("ops"),
+            "triage",
+            "Plugin triage agent",
+            "gpt-5.4-mini",
+            "high",
+        );
+
+        let previous_home = env::var_os("HOME");
+        let previous_claw_config_home = env::var_os("CLAW_CONFIG_HOME");
+        env::set_var("HOME", temp_dir("plugin-discovery-user-home"));
+        env::set_var("CLAW_CONFIG_HOME", &config_home);
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        handle_plugins_slash_command(
+            Some("install"),
+            Some(plugin_source.to_str().expect("utf8 path")),
+            &mut manager,
+        )
+        .expect("plugin install should succeed");
+
+        let skills_report =
+            super::handle_skills_slash_command(None, &workspace).expect("skills should render");
+        assert!(skills_report.contains("ops:deploy · Nested deployment guidance"));
+        assert!(skills_report.contains("Plugins:"));
+        assert!(skills_report.contains("demo-plugin:reviews:audit · Plugin audit guidance"));
+
+        let agents_report =
+            super::handle_agents_slash_command(None, &workspace).expect("agents should render");
+        assert!(agents_report.contains("Plugins:"));
+        assert!(agents_report
+            .contains("demo-plugin:ops:triage · Plugin triage agent · gpt-5.4-mini · high"));
+
+        if let Some(value) = previous_home {
+            env::set_var("HOME", value);
+        } else {
+            env::remove_var("HOME");
+        }
+        if let Some(value) = previous_claw_config_home {
+            env::set_var("CLAW_CONFIG_HOME", value);
+        } else {
+            env::remove_var("CLAW_CONFIG_HOME");
+        }
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(plugin_source);
+    }
+
+    #[test]
     fn agents_and_skills_usage_support_help_and_unexpected_args() {
         let cwd = temp_dir("slash-usage");
 
@@ -2418,6 +2808,7 @@ mod tests {
             super::handle_skills_slash_command(Some("--help"), &cwd).expect("skills help");
         assert!(skills_help.contains("Usage            /skills"));
         assert!(skills_help.contains("legacy /commands"));
+        assert!(skills_help.contains("enabled plugin skills"));
 
         let skills_unexpected =
             super::handle_skills_slash_command(Some("show help"), &cwd).expect("skills usage");
