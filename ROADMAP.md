@@ -5008,3 +5008,76 @@ ear], /color [scheme], /effort [low|medium|high], /fast, /summary, /tag [label],
    **Blocker.** None. Pure parser-level fix; ~30 lines in `parse_export_args()`.
 
    **Source.** Jobdori dogfood 2026-04-20 against `/tmp/jobdori-130-export-error/rust` discovered while auditing #130 export error path. Joins **Silent-state inventory** (#102, #127, #129, #130) family as 5th — silent fallback to default instead of erroring. Joins **Parser-level trust gap quintet** (#108, #117, #119, #122, #127) as 6th — same `_other` fall-through pattern at the per-verb arg parser level. Joins **Truth-audit / diagnostic-integrity** — wrong session is exported without any signal to the operator. Natural bundle: **#130 + #131** — export-surface integrity pair: error envelope (#130) + correct session targeting (#131). Both required for `export` verb to be clawable. Session tally: ROADMAP #131.
+
+## Pinpoint #132. Global `--output-format json` error renderer flattens every typed error variant into `{type:"error", error:<prose>}`, erasing `§4.44` typed envelope structure at the final serialization boundary
+
+**The clawability gap.** The runtime already defines *five* typed error enums — `SessionError`, `ConfigError`, `McpServerManagerError`, `PromptBuildError`, `SessionControlError` — each with variant discriminators that carry real structure (`Io(_)`, `Json(_)`, `Format(_)`, etc.). Every CLI-side emission boundary for `--output-format json`, however, calls `error.to_string()` and wraps the resulting prose in `{"type":"error","error":<message>}`. The variant tag is destroyed, the `io::ErrorKind` is destroyed, the operation name is destroyed, the resource target is destroyed, the actionable hint is destroyed, and the retryable flag is destroyed — *at the final renderer boundary, after the fix-work for §4.44 + #130 already produced structure upstream.* Result: the `export` fix (#130) surfaces typed fields in text mode but still collapses to `{type, error}` in JSON mode, making `§4.44` half-real wherever the renderer sits. Any downstream claw dispatching on `error.kind` gets `undefined` everywhere.
+
+   **Trace path.**
+   - `rust/crates/rusty-claude-cli/src/main.rs:120-128` — `emit_cli_error()` top-level error emission: `serde_json::json!({ "type": "error", "error": message })`. `message: &str`. All kind / operation / target / errno / hint / retryable discarded at this exact line.
+   - `rust/crates/rusty-claude-cli/src/main.rs:2174-2178` — `resume_session()` session-load failure: `"error": format!("failed to restore session: {error}")`. Inner `SessionError::Io / Json / Format` variant erased via `Display`.
+   - `rust/crates/rusty-claude-cli/src/main.rs:2258-2260, 2295-2298` — resume command parse/dispatch failures: `"error": error.to_string()`. `PromptBuildError` / `SessionControlError` variant information destroyed.
+   - `rust/crates/rusty-claude-cli/src/main.rs:2225-2227, 2243-2247` — unsupported-command paths: `{type: "error", error: <prose>}`; no `kind:"usage"` discriminant even though `§4.44` explicitly requires this to gate the `Run claw --help for usage` trailer.
+   - `rust/crates/rusty-claude-cli/src/main.rs:3045-3051` — broad-cwd preflight: flat `{type, error: <message>}`. Recoverable-via-flag case (`--allow-broad-cwd`) carries no `hint` and no `retryable` field.
+   - `rust/crates/rusty-claude-cli/src/main.rs:3444` — MCP list-resources failure aggregation: `failures.push(json!({ "server": name, "error": error.to_string() }))`. Per-server typed `McpServerManagerError` loss.
+   - `rust/crates/runtime/src/session.rs:127-132` — `pub enum SessionError { Io(std::io::Error), Json(JsonError), Format(String) }` + `Display` impl that writes ONLY the inner string for each arm. The enum tag is never serialized.
+   - `rust/crates/runtime/src/config.rs:191+`, `mcp_stdio.rs:254+`, `prompt.rs:11+`, `session_control.rs:354+` — four more typed error enums with identical structural-loss pattern at the CLI emission boundary.
+   - Contrast: `rust/crates/rusty-claude-cli/src/main.rs:11537` — search JSON already emits `failed_servers[].error.context.transport`, proving a *nested* typed error shape is already supported by one call site. The other ~10 emission sites simply do not use it.
+
+   **Reproduce.**
+   ```
+   # Success case — typed shape works upstream (#130 fix landed)
+   $ claw export --output /tmp/out.md
+   # Failure case — JSON mode flattens everything
+   $ claw --output-format json export --output /tmp/nonexistent/out.md
+   {"type":"error","error":"failed to write transcript: No such file or directory (os error 2)"}
+   # vs. §4.44 required shape (produced upstream by #130 but erased here):
+   # {"type":"error","error":{"kind":"filesystem","operation":"export.write",
+   #   "target":"/tmp/nonexistent/out.md","errno":"ENOENT",
+   #   "hint":"intermediate directory does not exist; try mkdir -p /tmp/nonexistent first",
+   #   "retryable":false}}
+   ```
+   Five more variant pairs reproduce the same flattening (SessionError::Json vs Format, ConfigError variants, McpServerManagerError variants, PromptBuildError variants, SessionControlError variants). All collapse to the same `{type:"error", error:<prose>}` shape. A downstream claw cannot distinguish "session file is corrupt JSON" from "session file has wrong format" from "session file missing on disk" — three different recovery recipes, one indistinguishable envelope.
+
+   **Why this matters.**
+   1. **`§4.44` is half-real.** The contract exists upstream (ExportError in #130 carries `kind/operation/target/errno/hint/retryable`) but the final renderer boundary strips it back to a string. Every fix that conforms to §4.44 upstream gets erased downstream wherever `--output-format json` is active. The contract is only enforced if the renderer also preserves the shape.
+   2. **#130 is text-surface-only until this lands.** `claw export` with the #130 patch shows structured errors in text mode and flat strings in JSON mode. A clawhip orchestrator consuming `--output-format json` sees exactly the same envelope it saw before #130 was filed. The human-facing pain is fixed; the machine-facing pain is not.
+   3. **Runtime → CLI boundary is the single point of loss.** Every typed error enum reaches `main.rs` intact. `main.rs` then calls `.to_string()` once and discards everything. Fixing this means *one* serialization helper and *one* refactor pass across ~11 emission sites, not five crate-level refactors.
+   4. **`Run claw --help for usage` trailer is still ungated.** `§4.44` requires gating on `error.kind == "usage"`. The renderer has no `kind` field to gate on. Trailer is either always-on or always-off, never correctly selective.
+   5. **Joins silent-state / truth-audit family** (#80–#131) — typed information exists in the runtime but is *discarded at the output boundary*, matching the "runtime-knows / diagnostic-surface-doesn't" pattern of #102, #127, #129, #130.
+   6. **Joins JSON-envelope asymmetry family** (#90, #91, #92, #110, #115, #116) — `{type, error}` is the *fake* envelope; the real envelope per §4.44 is `{type, error: {kind, operation, target, errno, hint, retryable, message}}`. Every site currently emits the fake shape.
+
+   **Fix shape.**
+   1. **Introduce `ErrorEnvelope` type** in `rust/crates/runtime/src/error_envelope.rs`:
+      ```rust
+      #[derive(Debug, Serialize)]
+      pub struct ErrorEnvelope {
+          pub kind: ErrorKind,          // filesystem | permission | usage | auth | config | session | mcp | parse | runtime | invalid_path
+          pub operation: String,         // e.g. "export.write", "session.restore", "mcp.list_resources"
+          pub target: Option<String>,    // path, URL, server name, session id
+          pub errno: Option<String>,     // ENOENT, EPERM, etc. when io::Error
+          pub hint: Option<String>,      // actionable remediation
+          pub retryable: bool,
+          pub message: String,           // human-readable fallback (== current prose)
+      }
+      ```
+      Already conforms to the ExportError shape shipped in #130 — literal superset/rename.
+   2. **Add `From<SessionError>`, `From<ConfigError>`, `From<McpServerManagerError>`, `From<PromptBuildError>`, `From<SessionControlError>` impls** that map each variant to the correct `ErrorKind` and fill `errno` for `::Io(_)` arms, `hint` for `::Format(_)` arms, etc. One function per enum, five total. ~150 lines.
+   3. **Refactor the ~11 CLI emission sites** to call a single helper `emit_json_error(output_format, envelope)` that serializes the full envelope instead of `{type, error: <string>}`. Backward-compat: keep `message` field populated with the same prose current consumers already parse. ~60 lines net change.
+   4. **Gate the `Run claw --help for usage` trailer** on `envelope.kind == ErrorKind::Usage` as §4.44 requires. Text mode only; JSON mode never adds trailer.
+   5. **Golden-fixture regression lock.** `rust/crates/rusty-claude-cli/tests/error_envelope_golden.rs` — one fixture per ErrorKind variant × both output formats. Any future flattening of the envelope fails the fixture.
+   6. **Migration note in USAGE.md / CLAUDE.md**: `--output-format json` errors now carry typed envelopes; consumers parsing only `error` as a string continue to work via the `message` field but should migrate to reading `kind`/`operation`/`target`.
+
+   **Regression tests.**
+   - (a) `claw --output-format json export --output /tmp/nonexistent/out.md` → stderr JSON has `error.kind == "filesystem"`, `error.operation == "export.write"`, `error.errno == "ENOENT"`, `error.hint` populated, `error.retryable == false`.
+   - (b) `claw --output-format json resume /path/to/corrupt-session.json` → `error.kind == "session"`, `error.operation == "session.restore"`, `error.target == "/path/to/corrupt-session.json"`, message distinguishes Io vs Json vs Format variants via `error.errno` / `error.hint` fields.
+   - (c) `claw --output-format json doctor --allow-broad-cwd=bogus` → `error.kind == "usage"`, trailer absent from JSON output.
+   - (d) `claw --output-format json mcp list-resources` with one dead server → `failed_servers[].error.kind == "mcp"`, `operation == "mcp.list_resources"`, `target == "<server-name>"`, `retryable == true`.
+   - (e) Text mode unchanged: `claw export --output /tmp/nonexistent/out.md` still prints exactly the same human-readable line #130 already ships.
+   - (f) Golden fixture: each ErrorKind variant's JSON envelope byte-identical to fixture; any drift fails CI.
+
+   **Acceptance.** Every CLI-side `--output-format json` error emission carries a full §4.44 envelope. `error.kind` is non-null and dispatchable. `error.operation`, `error.target`, and at least one of `error.errno` / `error.hint` populated for every kind where the runtime knows them. `Run claw --help for usage` trailer appears only on `kind: "usage"` errors. Existing consumers reading `error` as a prose string continue to work via the `message` field (backward-compat additive, not breaking).
+
+   **Blocker.** None. All upstream typed enums already exist. ExportError from #130 already proves the envelope shape. Work is purely at the CLI serialization boundary: one new `ErrorEnvelope` type, five `From` impls, ~11 call-site refactors, one golden fixture. Ballpark 250 lines added, ~40 removed.
+
+   **Source.** Jobdori dogfood 2026-04-20 on `/tmp/jobdori-130-export-error/rust` (HEAD `93da4f1`) during 10-min cycle after gaebal-gajae audit of #130 commit d305178. Commit body self-declares the debt: *"JSON mode still uses string error rendering — separate concern requiring global error renderer refactor (tracked for follow-up cycle)."* Gaebal-gajae framing (2026-04-20 14:08 KST): *"typed errors exist, but JSON error rendering still erases them into top-level strings."* Joins **`§4.44` Typed-error envelope contract** — this is the renderer-side enforcement that closes the contract's serialization boundary. Joins **JSON-envelope asymmetry family** (#90, #91, #92, #110, #115, #116) — 7th entry, highest-leverage because it gates every future fix's surface. Joins **Silent-state inventory** (#102, #127, #129, #130, #131) — 6th entry, because typed truth exists in the runtime but the CLI boundary silently discards it. Joins **Truth-audit / diagnostic-integrity** (#80–#131) as 17th. Joins **Claude Code migration parity** — Claude Code's JSON error shape is typed; claw-code's is flat. Natural bundle: **#130 + #132** — export-surface typed errors (#130, text mode) + global JSON envelope enforcement (#132, machine mode). Both needed for `--output-format json` to be clawable end-to-end. Session tally: ROADMAP #132.
