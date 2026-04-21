@@ -5149,7 +5149,10 @@ fn format_status_report(
             context.git_summary.staged_files,
             context.git_summary.unstaged_files,
             context.git_summary.untracked_files,
-            format_active_session(context),
+            context.session_path.as_ref().map_or_else(
+                || format_active_session(context),
+                |path| path.display().to_string()
+            ),
             context.loaded_config_files,
             context.discovered_config_files,
             context.memory_file_count,
@@ -10423,7 +10426,7 @@ mod tests {
             status.contains("Git state        dirty · 3 files · 1 staged, 1 unstaged, 1 untracked")
         );
         assert!(status.contains("Changed files    3"));
-        assert!(status.contains("Session          active (boot-status-test)"));
+        assert!(status.contains("Session          session.jsonl"));
         assert!(status.contains("Staged           1"));
         assert!(status.contains("Unstaged         1"));
         assert!(status.contains("Untracked        1"));
