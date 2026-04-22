@@ -8623,3 +8623,93 @@ This is the **detection → closure → auditing** pattern for discoverability c
 - Build passes (no regressions)
 - Diagnostic-strictness family member (joins #122, #122b)
 
+
+---
+
+## Doctrine Refinement: Execution Artifacts vs. Support Artifacts
+
+**Source:** gaebal-gajae validation on cycle #70 closure (2026-04-23 03:56 Seoul). Key refinement: "merge order만 있으면 반쪽이고, cluster별로 merge 후 뭘 확인할지까지 있으면 이건 진짜 **execution artifact**입니다."
+
+### The Three-Tier Artifact Classification
+
+| Tier | Type | Answers | Example |
+|---|---|---|---|
+| 1 | **Documentation** | "What exists?" | USAGE.md verb listings |
+| 2 | **Support artifact** | "How do I understand this?" | REVIEW_DASHBOARD (priorities, batches) |
+| 3 | **Execution artifact** | "How do I actually do this?" | MERGE_CHECKLIST (order + validation + risks) |
+
+### What Makes An Execution Artifact
+
+Not every document labeled "integration support" achieves execution-grade. The distinction:
+
+**Support artifact (Tier 2):**
+- Organizes information
+- Answers "what's the state?"
+- Reduces cognitive load
+- Examples: REVIEW_DASHBOARD, PR-summaries, PARITY.md growth sections
+
+**Execution artifact (Tier 3):**
+- Includes **validation steps** (not just order)
+- Answers "how do I complete this without breaking things?"
+- Provides pass/fail criteria
+- Includes conflict-risk assessment
+- Examples: MERGE_CHECKLIST.md
+
+**The validation test:** If reviewer/executor can follow the doc end-to-end without asking clarifying questions, it's execution-grade. If they still need to ask "how do I verify this?" or "what could go wrong?", it's support-grade.
+
+### #70 Crossed The Line
+
+MERGE_CHECKLIST.md is execution-grade because it includes:
+1. **Order** (merge Cluster 1 first)
+2. **Per-branch prerequisites** (tests pass, no conflicts)
+3. **Conflict risk map** (#122/#122b sequential)
+4. **Validation after each merge** (rebuild, run tests, dogfood)
+5. **Post-full-merge checklist** (full workspace build, all verbs work)
+
+If reviewer gets stuck, they can pause → consult the checklist → find the answer. That's the reliability threshold.
+
+### Why This Matters At Scale
+
+At queue saturation (17+ branches), execution artifacts scale better than support artifacts:
+
+- **Support artifacts** help one reviewer understand the queue. Useful for 1-5 branches.
+- **Execution artifacts** let multiple reviewers (or automation) work in parallel, each following the runbook. Useful at N ≥ 5.
+- **Documentation** still matters but assumes reviewer will figure out execution on their own.
+
+For 17 branches with 6 clusters, 3-4 reviewers could potentially work simultaneously if they have an execution artifact. Support artifacts alone would still require sequential review.
+
+### The Artifact-Tier Triad
+
+Previous doctrine identified: **integration-support artifacts** (cycle #64).
+This refinement: **execution artifacts are a higher tier of the same principle.**
+
+Cycle #64 said: "docs that reduce reviewer friction are first-class deliverables."
+Cycle #70 refines: "docs that enable reviewer execution are the highest tier."
+
+### Anti-Pattern
+
+❌ **Mistaking support for execution** — "I wrote a dashboard, review should be easy now" (no, dashboard is only Tier 2).
+❌ **Assuming reviewer knows validation steps** — without validation, even a good order can produce broken merges.
+❌ **Leaving conflict risk to reviewer judgment** — conflicts need explicit mapping, not assumed.
+
+✅ **Full tier recognition:** Ship Tier 1 (docs), Tier 2 (support), AND Tier 3 (execution) for critical workflows.
+
+### Applied: Cycle #64 → #70 Artifact Progression
+
+| Artifact | Tier | Cycle | Why |
+|---|---|---|---|
+| PARITY.md (growth update) | Tier 1 | #64 | Documents state |
+| PR-summary-249 | Tier 2 | #62 | Helps reviewer understand one branch |
+| REVIEW_DASHBOARD.md | Tier 2 | #66 | Helps reviewer understand the queue |
+| USAGE.md verb additions (#162) | Tier 1 | #68 | Documents new surfaces |
+| **MERGE_CHECKLIST.md** | **Tier 3** | **#70** | **Enables executing the merge** |
+
+### Next Level: Automation
+
+If Tier 3 is "executable by humans," the next level is "executable by automation."
+Potential future artifact: **MERGE_RUNBOOK.sh** — shell script that implements MERGE_CHECKLIST.md.
+
+Not needed yet (17 branches can be merged manually), but the pattern scales.
+
+---
+
