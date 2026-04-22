@@ -6394,3 +6394,82 @@ src.session_store.SessionNotFoundError: "session 'nonexistent' not found in .por
 **Blocker.** None. Purely CLI-layer wiring; `session_store.load_session` already accepts `directory` and already raises the typed `SessionNotFoundError`. This is closing the gap between the library contract (which is clean) and the CLI contract (which isn't).
 
 **Source.** Jobdori dogfood sweep 2026-04-22 17:44 KST — ran `claw load-session nonexistent`, got a Python traceback. Compared `--help` across the #160 triplet; confirmed `list-sessions` and `delete-session` both have `--directory` + `--output-format` but `load-session` has neither. The session-lifecycle surface is inconsistent in a way that directly hurts claws that already adopted #160.
+
+## Pinpoint #166. `flush-transcript` CLI lacks `--directory` / `--output-format` / `--session-id` — session-*creation* command is out-of-family with the now-symmetric #160/#165 lifecycle triplet
+
+**Gap.** The session lifecycle has a creation step (`flush-transcript`) and a management triplet (`list-sessions`, `delete-session`, `load-session`). #160 and #165 made the management triplet fully symmetric — all three accept `--directory` and `--output-format {text,json}`, and emit structured JSON envelopes. But `flush-transcript` — which *creates* the persisted session file in the first place — has **none of these flags** and emits a hybrid path-plus-key=value text blob on stdout:
+
+```
+$ claw flush-transcript "hello"
+.port_sessions/629412aad6f24b4fb44ed636e12b0f25.json
+flushed=True
+```
+
+Two lines, two formats, one a path and one a key=value. Claws scripting session creation have to:
+- `tail -n 2 | head -n 1` to get the path, or regex for `\.json$`
+- Parse the second line as a key=value pair
+- Extract the session ID from the filename (stripping extension)
+- Hope the working directory is the one they wanted sessions written to
+
+**Impact.** Three concrete breakages:
+
+1. **No way to redirect creation to an alternate `--directory`.** Claws running out-of-tree (e.g., `/tmp/claw-run-XXX/.port_sessions`) must `chdir` before calling `flush-transcript`. Creates race conditions in parallel orchestration and breaks composition with `list-sessions --directory /tmp/...` and `load-session --directory /tmp/...` which *do* accept the flag.
+
+2. **Session ID is engine-generated and only discoverable via stdout parsing.** There's no way to say `flush-transcript "hello" --session-id claw-run-42`, so claws that want deterministic session IDs for checkpointing/replay must regex the output to discover what ID the engine picked. The ID is available in the persisted file's content (`.session_id`), but you have to load the file to read it.
+
+3. **Output is unparseable as JSON, unkeyed in text mode.** Every other lifecycle CLI now emits either parseable JSON or well-labeled text. `flush-transcript` is the one place where the output format is a historical artifact. Claws building session-creation pipelines have to special-case it.
+
+**Repro (family consistency check).**
+```bash
+# Management triplet (all three symmetric after #160/#165):
+$ claw list-sessions --directory /tmp/a --output-format json
+{"sessions": [], "count": 0}
+
+$ claw delete-session foo --directory /tmp/a --output-format json
+{"session_id": "foo", "deleted": false, "status": "not_found"}
+
+$ claw load-session foo --directory /tmp/a --output-format json
+{"session_id": "foo", "loaded": false, "error": {"kind": "session_not_found", ...}}
+
+# Creation step (out-of-family):
+$ claw flush-transcript "hello" --directory /tmp/a --output-format json
+error: unrecognized arguments: --directory /tmp/a --output-format json
+
+$ claw flush-transcript "hello"
+.port_sessions/629412aad6f24b4fb44ed636e12b0f25.json
+flushed=True
+```
+
+**Fix shape (~40 lines across CLI + engine).**
+
+1. **Engine layer** — `QueryEnginePort.persist_session(directory: Path | None = None)` — pass through to `save_session(directory=directory)` (which already accepts it). No API break; existing callers pass nothing.
+
+2. **CLI flags** — add to `flush-transcript` parser:
+   - `--directory DIR` — alternate storage location (parity with triplet)
+   - `--output-format {text,json}` — same choices as triplet
+   - `--session-id ID` — override the auto-generated UUID (deterministic IDs for claw checkpointing)
+
+3. **JSON output shape** (success):
+   ```json
+   {
+     "session_id": "629412aad6f24b4fb44ed636e12b0f25",
+     "path": "/tmp/a/629412aad6f24b4fb44ed636e12b0f25.json",
+     "flushed": true,
+     "messages_count": 1,
+     "input_tokens": 0,
+     "output_tokens": 3
+   }
+   ```
+   Matches the `load-session --output-format json` success shape (modulo `path` + `flushed` which are creation-specific).
+
+4. **Text output** — keep the existing two-line format byte-identical for backward compat; new structure only activates when `--output-format json`.
+
+**Acceptance.** All four of these pass:
+- `claw flush-transcript "hi" --directory /tmp/a` persists to `/tmp/a/<id>.json`
+- `claw flush-transcript "hi" --session-id fixed-id` persists to `.port_sessions/fixed-id.json`
+- `claw flush-transcript "hi" --output-format json` emits parseable JSON with all fields
+- Existing `claw flush-transcript "hi"` output unchanged byte-for-byte
+
+**Blocker.** None. `save_session` already accepts `directory`; `QueryEnginePort.session_id` is already a settable field; the wiring is pure CLI layer.
+
+**Source.** Jobdori dogfood sweep 2026-04-22 17:58 KST — ran `flush-transcript "hello"`, got the path-plus-key=value hybrid output, then checked `--help` for the flag pair I just shipped across the triplet in #165. Realized the session-*creation* command was asymmetric with the now-symmetric management triplet. Closes the last gap in the session-lifecycle CLI surface.
