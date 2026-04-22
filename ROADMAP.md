@@ -6996,3 +6996,44 @@ No credential resolution is triggered for any of these paths.
 - #250 (surface parity framing of same failure)
 - §4.44 typed-envelope contract
 - SCHEMAS.md (specifies the 4 session-management verbs as top-level CLAWABLE surfaces)
+
+---
+
+## Pinpoint #130b. Filesystem errors discard context and collapse to generic errno strings
+
+**Concrete observation (cycle #47 dogfood, 2026-04-23 01:31 Seoul):**
+
+```bash
+$ claw export latest --output /private/nonexistent/path/file.jsonl --output-format json
+{"error":"No such file or directory (os error 2)","hint":null,"kind":"unknown","type":"error"}
+```
+
+**What's broken:**
+- Error is generic errno string with zero context
+- Doesn't say "export failed to write"
+- Doesn't mention the target path
+- Classifier defaults to "unknown" even though code path knows it's filesystem I/O
+
+**Root cause (traced at main.rs:6912):**
+The `run_export()` function does `fs::write(path, &markdown)?;`. When this fails:
+1. `io::Error` propagates via `?` to `main()`
+2. Converted to string via `.to_string()`, losing all context
+3. `classify_error_kind()` can't match "os error" or "No such file"
+4. Defaults to `"kind": "unknown"`
+
+**Fix strategy:**
+Wrap `fs::write()`, `fs::read()`, `fs::create_dir_all()` in custom error handlers that:
+1. Catch `io::Error`
+2. Enrich with operation name + target path + `io::ErrorKind`
+3. Format into recognizable message substrings (e.g., "export failed to write: /path/to/file")
+4. Allow `classify_error_kind()` to return specific kind (not "unknown")
+
+**Scope and next-cycle plan:**
+Family-extension work (filesystem domain). Implementation:
+1. New `filesystem_io_error()` helper wrapping `Result<T, io::Error>` with context
+2. Apply to all `fs::*` calls in I/O-heavy commands (export, diff, plugins, config, etc.)
+3. Add classifier branches for "export failed", "diff failed", etc.
+4. Regression test: export to nonexistent path, assert `kind` is NOT "unknown"
+
+**Acceptance criterion:**
+Filesystem operation errors must emit operation name + path in error message, enabling `classify_error_kind()` to return specific kind (not "unknown").
