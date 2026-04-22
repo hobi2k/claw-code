@@ -7725,3 +7725,81 @@ This makes the pacing legible to reviewers and self-auditable.
 
 ---
 
+
+---
+
+## Principle: Backlog Truthfulness Is Execution Speed
+
+**Source:** gaebal-gajae framing on cycle #60 closure (2026-04-23 02:55 Seoul). Key quote: "이미 해결된 걸 open으로 남겨두면 다음 claw가 또 파고 또 branch 만들고 또 중복 조사하게 되니까 backlog truthfulness 자체가 execution speed입니다."
+
+### Statement
+
+A ROADMAP entry that is open but already-implemented is **worse than no entry at all.** It signals "work remaining" to future claws who then:
+1. Re-probe the surface (wasted investigation cycle)
+2. Re-implement (wasted branch)
+3. Discover the duplicate mid-work (wasted context switch)
+4. Close the duplicate branch (wasted review bandwidth)
+
+**Cost of false-open backlog item:** 1 full cycle (or more) per re-discoverer.
+
+**Cost of audit-close cycle:** 1 cycle, shared across all future claws.
+
+Ratio: false-open costs scale with re-discovery count. Audit-close cost is fixed. **Truthfulness compounds.**
+
+### When Audit-Close Is The Right Move
+
+- Review queue is saturated (≥5 pending)
+- No new bug claims higher priority
+- Systematic audit against actual code finds divergence
+- Closure is evidence-based (clean build, doc verification, CLI dogfood)
+
+### Audit-Close Protocol
+
+```
+1. Identify pinpoints with "clear fix shape" and low implementation complexity
+2. Grep implementation for the function/surface named in the pinpoint
+3. Test the described failure mode on a clean binary/build
+4. If no longer reproduces: mark CLOSED with evidence
+   - Implementation location (file:line)
+   - Dogfood evidence (command + output)
+   - Date of verification
+5. Commit ROADMAP update
+```
+
+### Evidence Standard
+
+Closures must cite:
+- **File:line** of the fix (or a quote of the fix code)
+- **Reproduction attempt** that now passes
+- **Date of verification**
+- **Acceptance criteria** from the original pinpoint marked ✓
+
+Without these, closure is hand-waving and won't survive future re-probes.
+
+### Anti-Pattern
+
+❌ **Assumption-based closure.** "Someone probably fixed this." Without reverify, future audit cycle will re-open.
+
+❌ **Scope creep on closure.** Closing because "this is similar to X which is fixed." Each pinpoint is independent; verify independently.
+
+❌ **Hiding in comments.** Instead of marking CLOSED, writing "I think this might be done." Leaves future claws with same ambiguity.
+
+### Applied in Cycle #60
+
+Two pinpoints closed with full evidence:
+- **#136 (compact+json):** main.rs:4319-4362 shows correct dispatch ordering. Dogfood test confirms valid JSON envelope. Verified 2026-04-23.
+- **#153b (PATH docs):** README.md:139-175 shows three PATH setup options. Matches all acceptance criteria from original pinpoint. Verified 2026-04-23.
+
+**Result:** 49 pinpoints → 47 genuinely-open. Future claws won't re-probe these two.
+
+### The Shipping-Equivalence Insight
+
+Cycles that don't produce code can still produce **shipping-equivalent outcomes** when they:
+- Prevent duplicate work
+- Preserve doctrine integrity
+- Maintain reviewer context
+
+These cycles look identical in output volume (no commits to code) but radically different in downstream effect. Cycle accounting should reflect this, not just count commits.
+
+---
+
