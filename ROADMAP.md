@@ -9794,3 +9794,28 @@ Added two new classifier branches:
 
 **Closed:** Yes — shipped in cycle #94, feature branch `feat/jobdori-168c-emission-routing`.
 
+## Pinpoint #170. Four additional classifier gaps — SHIPPED (cycle #95, 2026-04-23 07:32 Seoul)
+
+**Gap.** Dogfood probe of #169 (cycle #95) revealed that the #169 comment *claimed* to cover `--permission-mode bogus`, but the actual message format is `unsupported permission mode 'bogus'` (NO `for --` prefix). Doc-vs-reality lie in the previous fix. Three additional classifier gaps found in the same probe:
+
+1. `unsupported permission mode '<value>'` from `parse_permission_mode_arg`
+2. `invalid value for --reasoning-effort: '<value>'; must be low, medium, or high` from `--reasoning-effort` validator
+3. `model string cannot be empty` from empty `--model ""` rejection
+4. `slash command /<name> is interactive-only. Start \`claw\` ...` from bare slash-command invocation outside REPL
+
+All four were emitting `kind: "unknown"` in JSON envelope.
+
+**Fix shape:** Added 4 new classifier branches in `classify_error_kind`. Three of them map to `cli_parse` (aligned with #169 doctrine); the fourth gets a new `slash_command_requires_repl` kind because it's a command-mode misuse, not a parse error — consumers can programmatically offer REPL-launch guidance.
+
+**Test added:** `classify_error_kind_covers_flag_value_parse_errors_170_extended` (4 positive + 2 sanity guards).
+
+**Tests:** 225/225 pass (+1 from #170).
+
+**New classifier kind:** `slash_command_requires_repl` — specifically for bare slash-command invocations that require the REPL context. More specific than `cli_parse` or `unsupported_command`.
+
+**Meta-observation:** #170 exposed a **self-documenting lie**: the #169 fix comment listed `--permission-mode bogus` as covered, but the actual string pattern differs. Systematic probe verification caught it. Lesson: classifier comments should name **exact matched substring**, not "this should cover X" (which is aspirational).
+
+**Family:** Typed-error family. Related: #121, #127, #129, #130, #164, #169, #247.
+
+**Closed:** Yes — shipped in cycle #95, feature branch `feat/jobdori-168c-emission-routing`, commit `1a4d0e4`.
+
