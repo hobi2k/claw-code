@@ -9882,3 +9882,39 @@ This error pattern is used by multiple verbs that reject trailing positional arg
 **Family:** Typed-error family. Related: #121, #127, #129, #130, #164, #169, #170, #247.
 
 **Closed:** Yes (classifier axis) — shipped in cycle #97, feature branch `feat/jobdori-168c-emission-routing`, commit `fbb0ab4`.
+
+## Pinpoint #172. SCHEMAS.md v1.5 baseline claim `action` in "4 inventory verbs" — actual is 3 — SHIPPED (cycle #98, 2026-04-23 08:35 Seoul)
+
+**Gap.** During cycle #98 dogfood probe of non-classifier axes (pivoting from dense classifier coverage), systematic JSON shape audit revealed a doc-vs-reality lie in SCHEMAS.md § Phase 1 Normalization Targets.
+
+SCHEMAS.md Phase 1 section claimed:
+> "unify where `action` field appears (only in **4 inventory verbs**)"
+
+Empirical verification found only **3 inventory verbs** emit `action`:
+- `mcp` — HAS `action`
+- `skills` — HAS `action`
+- `agents` — HAS `action`
+- **`list-sessions` — uses `command` instead (NOT `action`)**
+
+The fourth verb was misremembered. This is a doc-truthfulness issue: downstream consumers planning adapters for Phase 1 normalization would assume 4-verb coverage, encounter empty handlers, report "missing action field bug" in reality.
+
+**Fix shipped.** Commit `ce352f4`. Two changes:
+
+1. **SCHEMAS.md correction:** "4 inventory verbs" → "3 inventory verbs: mcp, skills, agents"
+
+2. **Regression test added:** `v1_5_action_field_appears_only_in_3_inventory_verbs_172`
+   - Asserts `mcp`, `skills`, `agents` HAVE `action` field (positive cases)
+   - Asserts `help`, `version`, `doctor`, `status`, `sandbox`, `system-prompt`, `bootstrap-plan`, `list-sessions` do NOT have `action` field (negative cases)
+   - Forces SCHEMAS.md documentation + binary emission to stay synchronized
+   - Would fail if a new verb adds `action`, or one of the 3 removes it
+
+**Tests:** 227/227 pass (+1 from #172).
+
+**Meta-observation:** This completes a **doc-truthfulness trifecta** on SCHEMAS.md:
+- Cycle #91: Added v1.5 Emission Baseline (133 lines, documented 13 verbs)
+- Cycle #92: Added shape parity guard test (10 cases)
+- **Cycle #98: Locked the Phase 1 target count at 3 with positive+negative test cases**
+
+**Doc-truthfulness family membership:** #76, #79, #82, #172.
+
+**Closed:** Yes — shipped in cycle #98, feature branch `feat/jobdori-168c-emission-routing`, commit `ce352f4`.
