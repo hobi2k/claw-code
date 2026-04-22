@@ -8226,3 +8226,72 @@ Total: ~5 hours of cycles in ~20 minutes of wall time.
 
 ---
 
+
+---
+
+## Doctrine Extension: Integration Support Artifacts
+
+**Source:** gaebal-gajae framing on cycle #64 closure (2026-04-23 03:26 Seoul). Key quote: "review-ready branch가 두 자릿수면, 이런 상태 문서는 단순 메모가 아니라 **integration support artifact**에 가깝습니다."
+
+### Statement
+
+When the review queue is saturated (N ≥ 5 pending branches), certain documents stop being "reference material" and become **integration support artifacts** — outputs whose primary purpose is to reduce the cognitive cost of reviewing queued work.
+
+### Classes of Integration Support Artifacts
+
+| Artifact | What it does | Example |
+|---|---|---|
+| **PR-ready summary** (cycle #62) | Explains one branch with reviewer checklist + Q&A | `/tmp/pr-summary-249.md` |
+| **Phase-state document** (cycle #64) | Answers "what is the project state?" for external readers | `PARITY.md` growth section |
+| **Cluster map** | Shows which branches are in the same cluster | `ROADMAP.md` pinpoint tables |
+| **Cycle-type declaration** | Labels each cycle's intent (velocity/hygiene/integration) | Discord message prefixes |
+| **Doctrine catalog** | Captures learned principles + worked examples | ROADMAP principles sections |
+
+### Why They Matter More At Scale
+
+**At N=1 branch**: a branch speaks for itself. Integration artifact overhead is waste.
+
+**At N=5+ branches**: reviewer context-switches 5+ times. Each switch costs minutes. Integration artifacts compress each context into a cheap re-entry point.
+
+**At N=13+ branches**: without artifacts, reviewing is near-impossible. Reviewer can't hold 13 surfaces in head simultaneously. Integration artifacts become **the differentiator** between "will-be-reviewed" and "will-rot."
+
+### Relationship To Existing Principles
+
+**Backlog-truthfulness** (cycle #60): false-open pinpoints cost future claws.
+**Integration-bandwidth** (cycle #62): branch creation is LAST step at scale.
+**Integration support artifacts** (cycle #64 extension): **documents that support review throughput are also first-class deliverables.**
+
+These three principles form the **queue-saturation triad**:
+1. Don't create false work (truthfulness)
+2. Don't create premature branches (bandwidth)
+3. **Do create documents that support existing branches** (artifacts)
+
+### Cycle Classification Extension
+
+**Doc cycles** (hygiene sub-type) now split into:
+- **Stale-fact updates** (PARITY.md, README metrics) — ensures external accuracy
+- **Integration support artifacts** (PR summaries, cluster maps) — reduces review cost
+- **Doctrine formalization** (principles, worked examples) — future-proofs decisions
+
+Each type is legitimate; pick based on queue state and what's missing.
+
+### Anti-Pattern
+
+❌ **Code cycles when queue is saturated** — compounds review load
+❌ **Silent cycles without type declaration** — hides the intent from collaborators
+❌ **Doc cycles without evidence** — hand-waving updates don't reduce friction
+
+✅ **Doc cycles that cite specific numbers, cluster positions, and phase states** — high-signal, low-cost work
+
+### Applied: Cycle #64 Pattern
+
+Cycle #64 produced:
+- Growth metrics (specific numbers: LOC, test LOC, commits)
+- Phase state ("pending review phase, 13 branches awaiting integration")
+- Cluster delivery list (cycles #39–#63 summarized)
+- Current HEAD anchor (`ad1cf92`)
+
+These are all reducible to: **what would an external reader need to understand the current state in 60 seconds?** PARITY.md now answers that.
+
+---
+
