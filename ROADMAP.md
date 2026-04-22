@@ -8459,7 +8459,18 @@ This audit lens has now found 3 instances (#122, #122b, #161) in fewer than 10 c
 
 ## Pinpoint #162. USAGE.md missing sections for binary verbs: `dump-manifests`, `bootstrap-plan`, `acp`, `export`
 
-**Status: 📋 FILED (cycle #67, 2026-04-23 03:36 Seoul).**
+**Status: 🟢 REVIEW-READY on `docs/jobdori-162-usage-verb-parity` at commit `48da190` (cycle #68, 2026-04-23 03:39 Seoul).**
+
+**Filed:** cycle #67. **Implemented:** cycle #68 (≈2 min). Closed via branch-last protocol: parity audit found gap, next cycle implemented when gaebal-gajae reframed doc-fix as integration-support artifact.
+
+**Shipped details:**
+- +87 lines in USAGE.md
+- All 4 verbs now have dedicated sections with examples
+- Build passes (no code changes, doc-only)
+- Parity audit re-run: 12/12 verbs documented (was 8/12)
+
+**Original filing below for reference:**
+
 
 **Surface.** `claw --help` lists verbs that are not documented in USAGE.md:
 
