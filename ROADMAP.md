@@ -8295,3 +8295,95 @@ These are all reducible to: **what would an external reader need to understand t
 
 ---
 
+
+---
+
+## Pinpoint #161. `claw version` reports stale Git SHA in git worktrees — build.rs watches .git/HEAD which is a pointer file in worktrees, not the actual ref
+
+**Status: 📋 FILED (cycle #65, 2026-04-23 03:31 Seoul).**
+
+**Surface.** `claw version` (and `--version`, `-V`) reports a stale Git SHA when the binary is built in a git worktree, then new commits are made. The cached build doesn't invalidate because cargo's `rerun-if-changed` hook watches the wrong path.
+
+**Reproduction:**
+```bash
+# 1. Create worktree, build binary
+git worktree add /tmp/jobdori-251 some-branch
+cd /tmp/jobdori-251/rust
+cargo build --bin claw
+
+# 2. Note the reported SHA
+./target/debug/claw version
+# Git SHA          abc1234
+
+# 3. Make new commits WITHOUT rebuilding
+git commit -m "new work"
+git commit -m "more work"
+
+# 4. Run claw version again — reports stale SHA
+./target/debug/claw version
+# Git SHA          abc1234  (should show new HEAD)
+
+# 5. Force rebuild via build.rs touch
+touch rust/crates/rusty-claude-cli/build.rs
+cargo build --bin claw
+./target/debug/claw version
+# Git SHA          def5678  (now correct)
+```
+
+**Root cause.** `build.rs` declares:
+```rust
+println!("cargo:rerun-if-changed=.git/HEAD");
+println!("cargo:rerun-if-changed=.git/refs");
+```
+
+In a git **worktree**, `.git` is **not** a directory — it's a plain-text pointer file containing:
+```
+gitdir: /Users/yeongyu/clawd/claw-code/.git/worktrees/jobdori-251
+```
+
+The actual HEAD file lives at `/Users/yeongyu/clawd/claw-code/.git/worktrees/jobdori-251/HEAD`. When you commit in a worktree, the pointer file `.git` itself doesn't change; only the worktree-specific HEAD does. Therefore `rerun-if-changed=.git/HEAD` never triggers in worktrees.
+
+Also, `.git/refs` refers to a path relative to the worktree's `.git` pointer — which doesn't exist as a directory when `.git` is a file.
+
+**Impact.** Medium. Affects anyone running claw from a worktree-based branch who expects `claw version` output to reflect the actual binary. In practice:
+- Development workflow: misleading version output for bug reports
+- CI: if workflow uses worktrees, may publish binaries with stale SHA
+- Dogfood: as cycle #65 discovered, the dogfood binary reports stale SHA by default
+
+**Fix shape (~15 lines in build.rs).** Resolve the actual HEAD path at build time, handling the worktree case:
+
+```rust
+fn resolve_git_head_path() -> Option<PathBuf> {
+    let git_path = Path::new(".git");
+    if git_path.is_file() {
+        // Worktree: .git is a pointer file
+        let content = std::fs::read_to_string(git_path).ok()?;
+        let gitdir = content.strip_prefix("gitdir:")?.trim();
+        Some(PathBuf::from(gitdir).join("HEAD"))
+    } else if git_path.is_dir() {
+        Some(git_path.join("HEAD"))
+    } else {
+        None
+    }
+}
+
+// Then:
+if let Some(head_path) = resolve_git_head_path() {
+    println!("cargo:rerun-if-changed={}", head_path.display());
+    // Also watch refs/heads/<current-branch>
+    // ...
+}
+```
+
+**Acceptance.**
+- `claw version` in a worktree reflects actual HEAD after commits
+- No manual `touch build.rs` required
+- No impact on non-worktree builds
+- Add test: worktree-based regression test (or at minimum, unit test for resolve function)
+
+**Related.** Minor but important: this is a **diagnostic-truthfulness** issue. `claw version` is a diagnostic surface that should report truth about the running binary. Per cycle #57 principle (diagnostic surfaces must reflect runtime reality), this fits the pattern.
+
+**Dogfood session.** Cycle #65 probe on `/tmp/jobdori-251/rust/target/debug/claw`. Initial binary reported `0aa0d3f`; actual HEAD was `92a79b5` (2 commits ahead, both merged during cycles #63 and #64).
+
+---
+
