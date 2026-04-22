@@ -9397,3 +9397,101 @@ The P0 doc-truthfulness family fixes (USAGE.md, ERROR_HANDLING.md, CLAUDE.md, SC
 
 ---
 
+
+---
+
+## Program: JSON Productization (Umbrella for #164, #167, #168, and related)
+
+**Status:** 🚀 Active (promoted from locus to program, cycle #85, 2026-04-23 05:40 Seoul, after gaebal-gajae review).
+
+**Class:** Multi-cycle coordinated program (not a single fix or locus). Umbrellas all JSON contract work.
+
+**Scope:** Take claw-code's JSON output from "bespoke-per-verb incoherence" to "productized contract with consumer guarantees."
+
+---
+
+### Why "Program" Not "Locus"
+
+**Locus (FIX_LOCUS_164):** Single design decision artifact. Answers: "What's the migration strategy?"
+
+**Program:** Coordinated effort across design, pinpoints, implementation cycles, and consumer-facing artifacts. Answers: "How do we take JSON from unreliable to reliable as a product contract?"
+
+**Promotion trigger (cycle #85):** Fresh-dogfood evidence (#168) proved v1.0 was never coherent. The migration isn't just "schema change" — it's **transforming JSON output into a product**: reliable, documented, contractual, version-stable.
+
+---
+
+### Program Phases
+
+| Phase | Name | Deliverables | Effort | Blocking State |
+|---|---|---|---|---|
+| **Phase 0** | Emergency stabilization | Fix #168 (bootstrap silent failure) + other broken JSON paths | ~1 day | Pre-program: blocks all downstream work |
+| **Phase 1** | v1.5 baseline | Normalize minimal invariants: every command emits valid JSON, top-level `kind`, consistent error shape | ~3 days | Requires Phase 0 |
+| **Phase 2** | v2.0 opt-in wrapped envelope | Dual-mode `--envelope-version=2.0` flag; opt-in migration | ~3 days | Requires Phase 1 |
+| **Phase 3** | v2.0 default | Default version bump; `--legacy-envelope` opt-out; consumer migration period | ~1 day + communication | Requires Phase 2 |
+| **Phase 4** | v1.0/v1.5 deprecation | Warnings → removal; documentation cleanup | ~1 day | Requires Phase 3 + sufficient migration time |
+
+**Total program effort:** ~9 dev-days + communication/migration windows.
+
+---
+
+### Program Member Pinpoints
+
+Related open work currently scoped under this program:
+
+| # | Title | Phase | Status |
+|---|---|---|---|
+| #164 | JSON envelope schema-vs-binary divergence | Phase 1 + 2 | 📋 Open (design ready) |
+| #167 | Text output format has no contract | Phase 5 (proposed) | 📋 Open |
+| #168 | Bootstrap JSON silent failure + incoherent per-command shapes | Phase 0 | 📋 Open (HIGHEST PRIORITY) |
+| #102 | Typed-error family (partial) | Phase 2 | 📋 Open |
+| #121 | Typed-error kind enumeration | Phase 2 | 📋 Open |
+| #127 | Verb-suffix typed-error classification | Phase 1 | 📋 Open (queued branch) |
+| #129 | MCP startup credential ordering typed-error | Phase 2 | 📋 Open (queued branch) |
+| #130 | Export error envelope typed | Phase 2 | 📋 Open (queued branch) |
+| #245 | Typed-error family (latest) | Phase 2 | 📋 Open |
+
+**Closed contributors:**
+- Cycle #78: USAGE.md P0 doc fix — supports Phase 1 documentation
+- Cycle #79: ERROR_HANDLING.md P0 doc fix — supports Phase 1 documentation
+- Cycle #81: CLAUDE.md P0 doc fix (#165) — supports Phase 1 documentation
+- Cycle #82: SCHEMAS.md source misdoc fix (#166) — supports Phase 2 documentation
+
+---
+
+### Program Doctrine
+
+**1. Fresh-dogfood before migration work.** Every phase checkpoint validates actual binary output, not theoretical design. Discovered via cycle #84/#168.
+
+**2. Honest effort estimates.** Scope creep is documented (6 → 9 dev-days with evidence) rather than hidden. Encourages trust.
+
+**3. Consumer-first design.** Each phase adds consumer value:
+- Phase 0: Stops silent failures (consumers can detect errors)
+- Phase 1: Provides stable baseline (consumers can rely on it)
+- Phase 2: Enables opt-in migration (consumers control transition)
+- Phase 3: Locks in v2.0 (consumers benefit from common envelope)
+
+**4. Evidence-driven revision.** The program's phasing was reshaped by #168 evidence mid-design. Future program phases may also revise based on fresh evidence.
+
+**5. Documentation as product.** Docs (USAGE, ERROR_HANDLING, CLAUDE, SCHEMAS) track the program's phase progression. Doc-truthfulness P0 family (closed cycle #82) set the foundation; program tracks active state.
+
+---
+
+### Program Status Board
+
+**Current phase:** Pre-Phase 0 (program scope defined, Phase 0 not yet started)
+
+**Blocking items:**
+- Phase 0: #168 bootstrap JSON fix (concrete code work, ~1 day)
+- Author coordination: Unblock integration of 8 review-ready branches (parallel track)
+
+**Next concrete action:**
+- Create `feat/jobdori-168-bootstrap-json` branch
+- Implement JSON rendering for bootstrap command
+- Verify fix with `claw bootstrap hello --output-format json | jq .`
+- Commit + push to review
+
+**Program-level success metric:**
+- When Phase 3 lands: A claw implementer can write ONE parser for ALL clawable commands. Currently impossible due to per-command shapes + silent failures.
+
+---
+
