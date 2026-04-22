@@ -6770,3 +6770,85 @@ Natural bundle: **#247 + #248 + #249** — classifier/envelope completeness swee
 - §4.44 typed error envelope contract (2026-04-20)
 - #77 split_error_hint() — should be applied to slash-command error path too
 - #247 (model: add classifier branches + ensure envelope carries them)
+
+
+---
+
+## Pinpoint #250. CLI surface parity gap between Python audit harness and Rust binary — SCHEMAS.md documents `list-sessions`/`delete-session`/`load-session`/`flush-transcript` as CLAWABLE top-level subcommands, but the Rust `claw` binary routes these through the `_other => Prompt` fall-through arm, emitting `missing_credentials` instead of running the documented operation
+
+**Gap.** SCHEMAS.md at the repo root defines a JSON envelope contract for 14 CLAWABLE top-level subcommands including `list-sessions`, `delete-session`, `load-session`, and `flush-transcript`. The Python audit harness at `src/main.py` implements all 14. The Rust `claw` binary at `rust/crates/rusty-claude-cli/` does NOT have these as top-level subcommands — session management lives behind `--resume <id> /session list` via the REPL slash command path.
+
+A claw following SCHEMAS.md as the canonical contract runs `claw list-sessions --output-format json` and hits the Rust binary's `_other => Prompt` fall-through arm (same code path as the now-closed parser-level trust gap quintet #108/#117/#119/#122/#127). The literal token `"list-sessions"` is sent as a prompt to the LLM, which immediately fails with `missing Anthropic credentials` because the prompt path requires auth.
+
+From the claw's perspective:
+- **Expected** (per SCHEMAS.md): `{"command": "list-sessions", "exit_code": 0, "sessions": [...]}`
+- **Actual** (Rust binary): `{"kind": "missing_credentials", "error": "missing Anthropic credentials; ..."}`
+
+**Repro.** Dogfooded 2026-04-22 on main HEAD `5f8d1b9` (cycle #38):
+
+```bash
+$ cd /Users/yeongyu/clawd/claw-code/rust
+$ env -i PATH=$PATH HOME=$HOME ./target/debug/claw list-sessions --output-format json
+{"error":"missing Anthropic credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before calling the Anthropic API ...","hint":null,"kind":"missing_credentials","type":"error"}
+# exit=1, NOT the documented SCHEMAS.md envelope
+
+$ env -i PATH=$PATH HOME=$HOME ./target/debug/claw delete-session abc123 --output-format json
+{"error":"missing Anthropic credentials; ...","hint":null,"kind":"missing_credentials","type":"error"}
+# Same fall-through. `abc123` treated as prompt continuation.
+
+$ env -i PATH=$PATH HOME=$HOME ./target/debug/claw --resume latest /session list --output-format json
+{"active":"session-...","kind":"session_list","sessions":[...]}
+# This is how the Rust binary actually exposes list-sessions — via REPL slash command.
+
+$ python3 -m src.main list-sessions --output-format json
+{"command": "list-sessions", "exit_code": 0, ..., "sessions": [...]}
+# Python harness implements SCHEMAS.md directly.
+```
+
+**Impact.**
+
+1. **Documentation-vs-implementation drift.** SCHEMAS.md is at the repo root (not under `src/` or `rust/`), implying it applies to the whole project. A claw reading SCHEMAS.md and assuming the contract applies to the canonical binary (`claw`) gets a credentials error, not the documented envelope.
+
+2. **Cross-implementation parity gap.** The same logical operation ("list my sessions") has two different CLI shapes:
+   - Python harness: `python3 -m src.main list-sessions --output-format json`
+   - Rust binary: `claw --resume latest /session list --output-format json`
+   
+   Claws that switch between implementations (e.g., for testing or migration) have to maintain two different dispatch tables.
+
+3. **Joins the parser-level trust gap family.** This is the 6th entry in the `_other => Prompt` fall-through family but with a twist: unlike #108/#117/#119/#122/#127 (where the input was genuinely malformed), the input here IS a valid surface name that SCHEMAS.md documents. The fall-through is wrong for a different reason: the surface exists in the protocol but not in this implementation.
+
+4. **Cred-error misdirection.** Same pattern as the pre-#127 `claw doctor --json` misdirection. A claw getting `missing_credentials` thinks it has an auth problem when really it has a surface-not-implemented problem.
+
+**Fix options.**
+
+**Option A: Implement the surfaces on the Rust binary.** Wire `list-sessions`, `delete-session`, `load-session`, `flush-transcript` as top-level subcommands in `rust/crates/rusty-claude-cli/src/main.rs`, each delegating to the existing session management code that currently lives behind `/session list`, `/session delete`, etc. Acceptance: all 4 subcommands emit the SCHEMAS.md envelope identically to the Python harness.
+
+**Option B: Scope SCHEMAS.md explicitly to the Python audit harness.** Add a scope note at the top of SCHEMAS.md clarifying it documents the Python harness protocol, not the Rust binary surface. File a separate pinpoint for "canonical Rust binary JSON contract" if/when that's needed.
+
+**Option C: Reject the surface mismatch at parse time.** Add explicit recognition in the Rust binary's top-level subcommand matcher that `list-sessions`/`delete-session`/etc. are Python-harness surfaces, and emit a structured error pointing to the Rust equivalent (`claw --resume latest /session list` etc.). Stop the fall-through into Prompt dispatch. Acceptance: running `claw list-sessions` in the Rust binary emits `{"kind": "unsupported_surface", "error": "list-sessions is a Python audit harness surface; use `claw --resume latest /session list` for the Rust binary equivalent"}`.
+
+**Recommended: Option C first (cheap, prevents cred misdirection), then Option B as documentation hygiene, then Option A if demand justifies the implementation cost.**
+
+Option C is the same pattern as #127's fix: reject known-bad inputs at parse time with actionable hints, don't fall through to Prompt. This is a new case of the same fall-through category but with the twist that the "bad" input is actually documented as valid in a sibling context.
+
+**Regression.** If Option A: add end-to-end tests matching the Python harness's existing tests for each subcommand. If Option C: add integration tests for each of the 4 Python-harness surface names verifying they emit `unsupported_surface` with the correct redirect hint.
+
+**Blocker.** None for Option C. Option A is larger (requires extending the Rust binary's top-level parser + wiring to session management). Option B is pure docs.
+
+**Priority.** Medium-high. This is red-state in the sense that the binary silently misroutes a documented surface into cred-error. Not a bug in the sense that the Rust binary is missing functionality it promised — but a bug in the sense that **protocol documentation promises a surface that doesn't exist at that address in the canonical implementation.** Either the docs are wrong or the implementation is incomplete; randomness is the current state.
+
+**Source.** Jobdori cycle #38 proactive dogfood 2026-04-22 23:35 KST in response to Clawhip pinpoint nudge. Probed session management CLI paths post-#247-merge; expected SCHEMAS.md envelope, got `missing_credentials` on all 4 surfaces. Joins:
+
+- **Parser-level trust gap family** (#108, #117, #119, #122, #127) as 6th — same `_other => Prompt` fall-through, but the "bad" input is actually a documented surface in SCHEMAS.md (new case class).
+- **Cred-error misdirection family** (#99, #127 pre-closure) — same pattern: local-ish operation silently needs creds because it fell into the wrong dispatch arm.
+- **Documentation-vs-implementation drift family** — SCHEMAS.md documents 14 surfaces; Rust binary has ~8 top-level subcommands; mismatch is undocumented.
+
+Natural bundle: **#127 + #250** — parser-level fall-through pair with a class distinction (#127 = suffix arg on valid verb; #250 = entire Python-harness verb treated as prompt).
+
+**Related prior work.**
+- SCHEMAS.md (the canonical envelope contract — drafted in Python-harness context)
+- §4.44 typed-envelope contract
+- #127 (closed: suffix arg rejection at parse time for diagnostic verbs)
+- #108/#117/#119/#122/#127 (parser-level trust gap quintet)
+- Python harness `src/main.py` (14 CLAWABLE surfaces)
+- Rust binary `rust/crates/rusty-claude-cli/src/main.rs` (different top-level surface set)
