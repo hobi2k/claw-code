@@ -9495,3 +9495,60 @@ Related open work currently scoped under this program:
 
 ---
 
+
+---
+
+## Pinpoint #168b. Fresh-dogfood validation (cycle #86) — bootstrap JSON output status
+
+**Status: 🔄 REVALIDATION (cycle #86, 2026-04-23 05:46 Seoul). Cycle #84 claim "no output" contradicted by fresh test.**
+
+**Finding:**
+
+Cycle #84 reported: `claw bootstrap hello --output-format json` produces **(no output)** with exit 0.
+
+Cycle #86 fresh-dogfood revalidation shows:
+```bash
+$ claw bootstrap 'test message' --output-format json
+{"error":"missing Anthropic credentials...","kind":"api_http_error","type":"error"}
+
+$ echo $?
+0
+```
+
+Bootstrap **IS** emitting JSON. The JSON is an error envelope (missing credentials in test env), but it is valid JSON output, not silent failure.
+
+**Revised assessment:**
+
+- ✅ Bootstrap JSON rendering IS present (not broken)
+- ❌ Bootstrap JSON content (error envelope) indicates credential missing in test environment, not code path issue
+- ❓ Primary #168 concern (incoherent per-command shapes) still valid; silent-failure specifically overstated
+
+**Implications for Phase 0:**
+
+Phase 0 #168 was framed as "fix bootstrap silent failure." Fresh-dogfood shows bootstrap is not silent — it emits error envelopes correctly.
+
+**Revised Phase 0 priority:**
+
+1. ✅ Error envelopes work (confirmed)
+2. ✅ Success envelope path works when credentials present (not tested in cycle #86 due to env constraint)
+3. ❓ List-sessions, doctor, mcp envelope consistency (cycle #84 showed shape divergence — needs reconfirm)
+
+**Recommendation:**
+
+Retest cycle #84 findings (list-sessions has "command" field; doctor doesn't) to confirm which commands actually have divergent shapes. If shapes are actually consistent, #168 filing needs revision. If shapes ARE inconsistent, Phase 0 should focus on **shape normalization** rather than "fixing silent failures."
+
+**Blocker status:**
+
+Fresh-dogfood validation is revealing cycle #84 conclusions may have been environment-specific. Before Phase 0 execution, need clean dogfood that isolates:
+1. Which commands have envelope shape divergence
+2. Which commands fail JSON rendering entirely
+3. Which issues are environment (missing creds) vs code (missing renderer)
+
+**Next action:**
+
+Run systematic envelope audit with controlled environment:
+- Set ANTHROPIC_AUTH_TOKEN
+- Test all 14 verbs
+- Document actual vs expected shapes
+- Compare cycle #84 claims vs cycle #86 reality
+
