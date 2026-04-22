@@ -8387,3 +8387,70 @@ if let Some(head_path) = resolve_git_head_path() {
 
 ---
 
+
+---
+
+## Cluster Update: #161 Elevated to Diagnostic-Strictness Family
+
+**Source:** gaebal-gajae validation on cycle #65 closure (2026-04-23 03:32 Seoul). Key quote: "이건 단순 build quirk가 아니라: 'version surface가 runtime reality를 잘못 설명한다'는 점에서 #57 원칙 정면 위반입니다."
+
+### The Reclassification
+
+**Before (cycle #65 initial filing):** #161 was grouped as "build-pipeline truthfulness" — a tooling-adjacent category.
+
+**After (cycle #67 reframe):** #161 is a first-class member of the **diagnostic-strictness family** (originally cycles #57–#59).
+
+### Why The Reclass Matters
+
+`claw version` is a **diagnostic surface**. It exists precisely to answer "what is the state of this binary?" When it reports stale Git SHA in a git worktree, it is:
+
+1. **Describing runtime reality incorrectly** — #57 principle violation ("diagnostic surfaces must be at least as strict as runtime reality")
+2. **Misleading downstream consumers** — bug reports, CI provenance, dogfood validation all inherit the stale SHA
+3. **Silent about the failure mode** — nothing in the output signals "this may be stale"
+
+The failure mode is identical in shape to #122 (doctor doesn't check stale-base) and #122b (doctor doesn't check broad-cwd): **diagnostic surface reports success/state, but underlying reality diverges**.
+
+### The Diagnostic-Strictness Family — Updated Membership
+
+| # | Surface | Runtime Reality | Gap | Status |
+|---|---|---|---|---|
+| #122 | `claw doctor` | Stale-base preflight (prompt path) | Doctor skipped stale-base check | 🟢 REVIEW-READY |
+| #122b | `claw doctor` | Broad-cwd check (prompt path) | Doctor green in home/root | 🟢 REVIEW-READY |
+| **#161** | **`claw version`** | **Current binary's Git SHA (real HEAD)** | **Reports stale SHA in worktrees** | **📋 FILED (new family member)** |
+
+All three:
+- Describe divergent realities (config vs. runtime)
+- Mislead the user who reads the diagnostic output
+- Can be fixed by making the diagnostic surface probe the actual state
+
+### Why This Is A Cluster, Not A Series Of One-Offs
+
+At cycle #57, we observed: `doctor` has one gap. At cycle #58, a second gap. At cycle #59, we formalized: **"diagnostic-strictness" is a principle, with an audit checklist.**
+
+Cycle #65 found a third instance. **This validates the cycle #59 investment.** Instead of treating #161 as novel, the audit lens immediately classified it: "This is the same failure mode as #122/#122b, just on a different surface."
+
+### Pattern Formalized: Diagnostic Surfaces Must Probe Current Reality
+
+Any surface whose name is "what is the state?" must:
+1. Read **live state** (not cached build metadata)
+2. Detect **mode-specific failures** (worktree vs. non-worktree, broad-cwd, stale-base)
+3. Warn when underlying reality diverges from what's reported
+
+**Surfaces on watch list** (not yet probed):
+- `claw state` — does it probe live session state?
+- `claw status` — does it probe auth/sandbox live?
+- `claw sandbox` — does it probe actual sandbox capability?
+- `claw config` — does it reflect active config or just raw file?
+
+### Implication For Future Cycles
+
+**Cycle #67 and onward:** When dogfooding, apply the diagnostic-strictness lens first.
+
+- See a diagnostic output? Ask: "Does this reflect runtime reality?"
+- See a stale value? Ask: "Is this a one-off, or a #122-family gap?"
+- See a success report? Ask: "Would the corresponding runtime call actually succeed?"
+
+This audit lens has now found 3 instances (#122, #122b, #161) in fewer than 10 cycles. The principle is **evidence-backed, not aspirational**.
+
+---
+
