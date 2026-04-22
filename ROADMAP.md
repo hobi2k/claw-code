@@ -7068,3 +7068,72 @@ Add "Post-build: Add to PATH" section in README (after Quick start), covering:
 **Acceptance criterion:** After reading this section, a new user should be able to build and run `claw` without confusion about where the binary is or whether the build succeeded.
 
 **Next-cycle action:** Implement #153 (original gap) + #153b (this follow-up) as single 60-line README patch.
+
+---
+
+## Pinpoint #130c. `claw diff --help` rejected with "unexpected extra arguments" — no help available for pure-local introspection commands
+
+**Concrete observation (cycle #50 dogfood, 2026-04-23 01:43 Seoul):**
+
+```bash
+$ claw diff --help
+[error-kind: unknown]
+error: unexpected extra arguments after `claw diff`: --help
+
+$ claw config --help
+[error-kind: unknown]
+error: unexpected extra arguments after `claw config`: --help
+
+$ claw status --help
+[error-kind: unknown]
+error: unexpected extra arguments after `claw status`: --help
+```
+
+All three are **pure-local introspection commands** (no credentials needed, no API calls). Yet none accept `--help`, making them less discoverable than other top-level subcommands.
+
+**What's broken:**
+- User cannot do `claw diff --help` to learn what diff does
+- User cannot do `claw config --help`
+- User cannot do `claw status --help`
+- These commands are less discoverable than `claw export --help`, `claw submit --help`, which work fine
+- Violates §4.51 help consistency rule: "if a command exists, --help must work"
+
+**Root cause (traced at main.rs:1063):**
+
+The `"diff"` parser arm has a hard constraint:
+```rust
+"diff" => {
+    if rest.len() > 1 {
+        return Err(format!(
+            "unexpected extra arguments after `claw diff`: {}",
+            rest[1..].join(" ")
+        ));
+    }
+    Ok(CliAction::Diff { output_format })
+}
+```
+
+When parsing `["diff", "--help"]`, the code sees `rest.len() > 1` and rejects `--help` as an extra argument. Similar patterns exist for `config` (line 1131) and `status` (line 1119).
+
+The help-detection code at main.rs:~850 has an early check: `if rest.is_empty()` before treating `--help` as "wants help". By the time `--help` reaches the individual command arms, it's treated as a positional argument.
+
+**Fix strategy:**
+
+Two options:
+
+**Option A (preferred): Unified help-before-subcommand parsing**
+Move `--help` and `--version` detection to happen **after** the first positional (`rest[0]`) is identified but **before** the individual command arms validate arguments. Allows `claw diff --help` to map to `CliAction::HelpTopic("diff")` instead of hitting the "extra args" error.
+
+**Option B: Individual arm fixes**
+Add `--help` / `-h` checks in each pure-local command arm (`diff`, `config`, `status`, etc.) before the "extra args" check. Repeats the same guard in ~6 places.
+
+Option A is cleaner (single fix, helps all commands). Option B is surgical (exact fix locus, lower risk of regression).
+
+**Scope and next-cycle plan:**
+File as a **consistency/discoverability gap**, not a blocker. Can ship as part of #141 help-consistency audit, or as standalone small PR.
+
+**Acceptance criterion:**
+- `claw diff --help` → emits help for diff command (not error)
+- `claw config --help` → emits help for config command
+- `claw status --help` → emits help for status command
+- Bonus: `claw export --help`, `claw submit --help` continue to work (regression test)
