@@ -10188,3 +10188,37 @@ One of: filesystem, auth, session, parse, runtime, mcp, delivery, usage, policy,
 **Status:** FILED. Fix requires `.github/workflows/` change. Proposed separate branch `feat/jobdori-175-ci-fmt-test-split` OR `feat/gaebal-175-ci-signal-decoupling` per gaebal-gajae authorship.
 
 **Connection to #176 previous filing:** None. My #175/#176 filing was a numbering collision. Correct numbering: #177 (filesystem classifier) + #178 (enum naming). #175 ownership belongs to gaebal-gajae's CI framing, which is a higher-level workflow gap.
+
+## Pinpoint #179. `skills install .` missing SKILL.md classified as `unknown` instead of `parse`/`validation` — FILED (cycle #102 refinement, 2026-04-23 10:09 Seoul)
+
+**Gap (per gaebal-gajae cycle #102 framing refinement).** Originally tangled into #177 filing, but properly separated: this is a distinct sub-case with a different correct `kind` value.
+
+```bash
+claw --output-format json skills install .
+# → {"error": "skill directory '.' must contain SKILL.md", "hint": null, "kind": "unknown", "type": "error"}
+```
+
+**Why different from #177:** 
+- #177 is a **filesystem error** (path doesn't exist) → `kind: "filesystem"`
+- #179 is a **validation/parse error** (path exists, but content doesn't match expected structure) → `kind: "parse"` or new `kind: "validation"`
+
+**Recommended fix shape:**
+```rust
+} else if message.contains("must contain SKILL.md") {
+    "parse"  // or "validation" if schema enum expands
+}
+```
+
+**Per gaebal-gajae refinement:** The correct family name is **"resource / install-surface error taxonomy gap"** (not "filesystem error family"). This encompasses:
+
+| Sub-case | Surface | Correct `kind` | Pinpoint |
+|---|---|---|---|
+| Nonexistent path | `skills install /nonexistent` | `filesystem` | **#177** |
+| Missing SKILL.md | `skills install .` | `parse` or `validation` | **#179** (this filing) |
+| Enum name drift | `export /bad/path` | `filesystem` (canonical) | **#178** |
+
+**Proposed branch bundle:** `feat/jobdori-177-install-surface-taxonomy` (covers #177 + #178 + #179 as one taxonomic sweep).
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+**Pinpoint count update:** 69 filed (+1 from #179), 55 genuinely open.
