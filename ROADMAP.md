@@ -11305,3 +11305,76 @@ claw skills install --bogus-flag
 **Branch:** `feat/jobdori-168c-emission-routing` @ 37 commits (freeze held).
 
 **Status:** All unaudited surfaces now probed (cycles #104-#108: plugins, agents, init, bootstrap-plan, system-prompt, export, sandbox, dump-manifests, skills). Phase 1 execution can begin once Phase 0 merges.
+
+---
+
+## Cycle #109 — Phase 0 + Dogfood Complete Checkpoint (2026-04-23 11:48 Seoul)
+
+**Status:** Probe cycles complete. All unaudited surfaces exhausted. Phase 1 kickoff document created + ready for execution.
+
+### What This Cycle Delivered
+
+- ✅ **PHASE_1_KICKOFF.md** — 192-line comprehensive execution plan for 6-bundle priority queue
+  - Priority 1: Error envelope contract drift (#181/#183)
+  - Priority 2: CLI contract hygiene sweep (#184/#185)
+  - Priority 3: Classifier sweep 4-verb (#186/#187/#189/#192)
+  - Priority 4: USAGE.md audit (#180)
+  - Priority 5: Dump-manifests help (#188)
+  - Priority 6+: Independents (#190, #191, others)
+  - All priority 1–5 bundles are gaebal-gajae reviewer-blessed
+- ✅ **Test verification:** 564 total tests pass (466 unit + 3 integration + 95 output-format), 0 failures
+- ✅ **Branch state:** 38 commits, clean working tree, freeze held
+
+### Probe Hypothesis (Fully Validated)
+
+**Multi-flag verbs** (init, bootstrap-plan, system-prompt, export, dump-manifests, skills install): **3–4 classifier gaps each**
+
+**Single-issue verbs** (list, show, sandbox, agents): **0–1 gaps**
+
+**Implication for future work:** Prioritize multi-flag verbs in new probes. Single-issue verbs are structurally cleaner.
+
+### Pinpoint Accounting (End of Dogfood)
+
+| Metric | Count | Notes |
+|---|---|---|
+| Total filed | 82 | Cycles #104–#108 inclusive |
+| Genuinely open | 67 | (82 - 15 closed/shipped) |
+| Classifier family | 19 members | 4 in unknown-option, 4 in filesystem sub-lineages |
+| Doc-truthfulness family | 6 members | 2 sub-axes: audit-flow (5) + probe-flow (1) |
+| Error envelope family | 2 members | #181/#183 (design decision pending) |
+| Install-surface taxonomy | 4 members | #177/#178/#179/#191 |
+| Design decisions | 1 member | #190 (help-routing) |
+| CI/workflow | 1 member | #175 (gaebal-gajae) |
+| Consumer-parity | 1 member | #173 |
+
+### Doctrine Count
+
+**28 doctrines** (added #28 in cycle #107: "first observation is hypothesis")
+
+Key doctrines for Phase 1:
+- #22: Schema baseline check before enum proposal
+- #25: Contract-surface-first ordering (foundation → extensions → cleanup)
+- #27: Same-pattern pinpoints bundle into one classifier sweep
+- #28: First observation is hypothesis; verify before filing
+
+### Branch Readiness
+
+**Branch:** `feat/jobdori-168c-emission-routing`
+- **Commits:** 38 (4 Phase 0 core + 7 dogfood filings + 1 checkpoint + 12 framework + 9 probe cycles + 4 cycle refinements + 1 Phase 1 kickoff)
+- **Tests:** 564 pass, 0 failures, 0 regressions
+- **Status:** Frozen (no new code after review guide), doc-only additions
+- **Reviewer readiness:** CYCLE_104-105_REVIEW_GUIDE.md + PHASE_1_KICKOFF.md provide full context
+
+### Known Issues (Non-Blockers)
+
+1. Discord message delivery (network timeout in cycle #108) — retry with local notification
+2. #190 needs architecture discussion (help-routing design decision)
+3. #182 depends on #181 resolution (plugin error envelope)
+
+### Next Action (Once Phase 0 Merges)
+
+Execute Phase 1 bundle sequence (Priority 1–5 + independents). Target execution time: ~50-60 min for all 5 priority bundles (10 min per bundle, parallel review possible).
+
+---
+
+**End of Phase 0 + Dogfood Cycles. All unaudited surfaces probed. Phase 1 plan locked. Awaiting merge approval for Phase 0.**
