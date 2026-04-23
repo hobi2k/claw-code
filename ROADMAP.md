@@ -11695,3 +11695,120 @@ Blocker category:      Infrastructure (GitHub org OAuth policy)
 **PR creation gate requires external human action. Both claws have exhausted CLI/API paths. Manual creation or org-admin intervention needed. Mode integrity preserved throughout.**
 
 🪨
+
+---
+
+## Cycle #117 Final Reframe + Doctrine #32 Formalized (gaebal-gajae, 2026-04-23 12:44 Seoul)
+
+### Authoritative Reframe (per gaebal-gajae)
+
+> **"Cycle #117 was not a 'PR blocked' cycle; it was the turn that isolated the failure from 'branch problem' to 'organization-level PR authorization barrier' through experimental separation."**
+
+The value was **not** in the block. The value was in **isolating the boundary of the block**.
+
+### Reviewer-Ready Compression (final)
+
+> **"The branch is pushable and reviewable, but PR creation into `ultraworkers/claw-code` is blocked specifically at the organization authorization layer, not by repository state or token liveness."**
+
+### Separation Made Clean
+
+Before cycle #117: "PR won't create. Why?"
+After cycle #117: Four independent dimensions separated:
+
+| Dimension | State | Verified By |
+|---|---|---|
+| Repository state | ✅ Healthy | push works, tests pass |
+| Branch readiness | ✅ Visible | `git ls-remote origin` shows commit |
+| Token liveness | ✅ Valid | own-fork PR creation worked |
+| **Org PR authorization** | ❌ **Blocked** | cross-claw + fork-based PR attempts |
+
+**This separation is the deliverable.** Not the blocker. The cartography of the blocker.
+
+### Experimental Evidence Collected
+
+1. **Direct `ultraworkers/claw-code` PR** → FORBIDDEN (both claws)
+2. **Fork → `ultraworkers/claw-code` PR** → FORBIDDEN (Jobdori)
+3. **Personal fork → own fork PR** → SUCCESS (Jobdori, sanity check)
+4. **Git push to `ultraworkers/claw-code`** → SUCCESS (Jobdori)
+5. **`gh api repos/ultraworkers/claw-code`** → `viewerPermission: ADMIN`
+
+**Interpretation:** The barrier is not branch-local, not token-local, and not user-local. It is specifically **org-level, specifically on the `createPullRequest` mutation, specifically when targeting `ultraworkers/claw-code`**.
+
+### Doctrine #32 (Formalized)
+
+**"Merge-wait mode actions must be within the agent's capability envelope. When blocked externally, diagnose by boundary separation and hand off to the responsible party, not by retry or redefinition."**
+
+**Operational protocol:**
+
+When a merge-readiness action fails:
+
+1. **Isolate the boundary through experiments** (don't retry same path)
+   - Try the same action in adjacent contexts (fork vs org, different head, different base)
+   - Verify each precondition independently (push, scopes, perms, tokens)
+   - Use control groups (known-good paths like own-fork PR)
+
+2. **Document the separation explicitly**
+   - List what works and what doesn't
+   - Pinpoint the narrowest failing dimension
+   - Express in terms of organizational/infrastructural categories, not code
+
+3. **Escalate to responsible party**
+   - Web UI (human in browser) for OAuth-blocked mutations
+   - Organization admin for policy-level changes
+   - Infrastructure team for repo-level config
+
+4. **Do NOT**
+   - Retry the same CLI command expecting different results
+   - Conflate branch state with authorization state
+   - Treat capability-envelope limits as failures of the cycle itself
+
+**Validation:** Cycle #117 both-claws blocked, boundary experimentally isolated, escalation path identified.
+
+### Next Action (External to Cycles)
+
+Per gaebal-gajae, "기술적 탐사가 아니라 author/owner intervention":
+
+**Fastest path:**
+- Human opens browser → `https://github.com/ultraworkers/claw-code/pull/new/feat/jobdori-168c-emission-routing`
+- Paste PR body from `/tmp/pr_body.md` or generate fresh from branch commits
+- Submit PR
+
+**Long-term fix:**
+- `ultraworkers` org admin authorizes GitHub CLI OAuth app for `createPullRequest` mutations
+- All future claw-code dogfood cycles can use CLI PR creation
+
+### State Update (Post-Doctrine-#32 Formalization)
+
+```
+Mode:                  MERGE-WAIT (integrity held)
+Branch:                feat/jobdori-168c-emission-routing @ 7a1e985
+Origin visibility:     ✅ (verified cycle #115, re-verified #117)
+PR creation:           ❌ Blocked at org-level OAuth authorization
+                        (NOT branch state, NOT token liveness, NOT repo perms)
+Separation achieved:   ✅ 4 dimensions experimentally isolated
+Next action path:      Web UI (human) OR org admin OAuth grant
+Doctrine count:        32 formalized
+Gate status:           Blocked pending author/owner intervention
+```
+
+### Doctrine Summary (Phase 0 + Dogfood)
+
+**32 doctrines accumulated** across cycles #97-#117:
+
+- Doctrines #1-#28: Probe + filing + framing methodology (cycles #97-#108)
+- Doctrine #29: Discovery termination is a deliverable (cycle #109)
+- Doctrine #30: Modes are state, not suggestions (cycle #110)
+- Doctrine #31: Merge-wait mode requires remote visibility (cycle #115)
+- **Doctrine #32: Merge-wait external blocks require boundary separation + escalation, not retry** (cycle #117)
+
+### Cross-Claw Coherence Metric
+
+- **Cycle #115**: 1 claw attempted, 1 succeeded (push to origin)
+- **Cycle #117**: 2 claws attempted, 2 blocked, IDENTICAL error pattern
+- **Diagnostic validity**: Single-claw = hypothesis. Cross-claw identical = **confirmed hypothesis**.
+
+---
+
+**Cycle #117 deliverable: Boundary of PR-creation permission barrier experimentally isolated. Merge-readiness state cleanly separated from authorization state. Doctrine #32 formalized. Author/owner intervention required.**
+
+🪨
