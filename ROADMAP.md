@@ -10077,7 +10077,7 @@ This naming follows the established `feat/jobdori-<number>-<brief>` convention a
 
 **Family alignment:** Part of typed-error classifier family (#121, #127, #129, #130, #164, #169, #170, #171, #174, #247). Future sweep might batch all remaining `unknown` classifications into a single pass.
 
-## Pinpoint #175. `skills install` filesystem errors classified as `unknown` instead of `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
+## Pinpoint #177. `skills install` filesystem errors classified as `unknown` instead of `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
 
 **Gap.** `claw --output-format json skills install <path>` returns `kind: "unknown"` for filesystem errors, violating the SCHEMAS.md v1.5 error kind enum which explicitly includes `"filesystem"` as a valid kind.
 
@@ -10120,7 +10120,7 @@ claw --output-format json skills install .
 
 **Status:** FILED. Per freeze doctrine, no fix on 168c. Proposed separate branch: `feat/jobdori-175-filesystem-error-classifier`.
 
-## Pinpoint #176. `export` emits `kind: "filesystem_io_error"` but enum lists only `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
+## Pinpoint #178. `export` emits `kind: "filesystem_io_error"` but enum lists only `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
 
 **Gap.** Inconsistent naming in error kind enum:
 
@@ -10158,3 +10158,33 @@ One of: filesystem, auth, session, parse, runtime, mcp, delivery, usage, policy,
 - **Genuinely open:** 54 (+2 from #175, #176)
 - **Typed-error family:** 12 members (#121, #127, #129, #130, #164, #169, #170, #171, #174, #175, #176, #247)
 - **Filesystem error sub-family emerging:** #175 (missing classifier), #176 (inconsistent naming). Likely others to discover (upload, read, write, etc. paths).
+
+## Pinpoint #175. `cargo fmt` CI gate masks substantive test signal — FILED (gaebal-gajae cycle, 2026-04-23 ~10:00 Seoul)
+
+**Gap (per gaebal-gajae framing).** Current CI pipeline couples formatting checks (`cargo fmt --all --check`) with test execution in a way that makes a cosmetic rustfmt diff surface as a red CI before maintainers can read the underlying test health. Effect:
+- CI history becomes noisy — looking at "recent red builds," maintainers can't quickly tell "real regression" from "formatting drift"
+- Maintainers waste cycles on "fix fmt first, then see if tests are green"
+- Stale formatting diffs on main (like the one just repaired in `cc8da08a`) mask test signal until someone applies `cargo fmt --all`
+
+**Historical evidence.** Just repaired such a scenario:
+- 188K brand redesign cycle found CI red on main due to `cargo fmt --all --check` diff in 2 Rust provider files
+- Had to rebase, apply fmt, and push `cc8da08a` as formatter-only commit to unblock
+- Even after the repair, main history shows CI red "for Rust reasons" without visible cause/effect
+
+**Proposed fix shape.** Split CI job matrix so `fmt` and `test` surface independently:
+1. **Separate jobs:** `fmt-check` and `test` as distinct GitHub Actions workflow jobs
+2. **Independent status reporting:** Each job reports its own green/red, not a joined gate
+3. **Optional: non-blocking fmt check** — fmt diff could be a warning-level check, not a blocker for test signal
+
+**Alternative fix shape:** Keep fmt blocking but make test run first and its signal visible even when fmt fails.
+
+**Consumer impact.**
+- Maintainers can dogfood test health from CI history at a glance
+- Formatting regressions don't hide functional regressions
+- Reduces "fix fmt, then see tests pass" churn cycles
+
+**Family:** CI / tooling. Not a classifier or schema gap. Product/workflow surface.
+
+**Status:** FILED. Fix requires `.github/workflows/` change. Proposed separate branch `feat/jobdori-175-ci-fmt-test-split` OR `feat/gaebal-175-ci-signal-decoupling` per gaebal-gajae authorship.
+
+**Connection to #176 previous filing:** None. My #175/#176 filing was a numbering collision. Correct numbering: #177 (filesystem classifier) + #178 (enum naming). #175 ownership belongs to gaebal-gajae's CI framing, which is a higher-level workflow gap.
