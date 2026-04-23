@@ -11225,3 +11225,83 @@ Priority 6+: Independent
 ### Doctrine Count
 
 27 → **28 total** (added "first observation is hypothesis")
+
+## Pinpoint #190. `claw skills install` no-args routes to help instead of error — FILED (cycle #108, 2026-04-23 11:40 Seoul)
+
+**Gap.** Routing inconsistency:
+
+```bash
+# No args — routes to help (action: "help")
+claw skills install
+# Output: {"action": "help", "kind": "skills", "unexpected": "install", "usage": {...}}
+
+# Compare to agents (reference implementation from cycle #105)
+claw agents bogus-action
+# Output: {"action": "help", "kind": "agents", "unexpected": "bogus-action", "usage": {...}}
+```
+
+**This might be intentional** (help-routing pattern for subcommands with missing args). But need to verify:
+1. Is `claw agents` the canonical reference for this behavior?
+2. Or should `skills install` emit an error `kind: "cli_parse"` + hint?
+
+**Status:** FILED. Requires design decision (reference verification or re-audit of agents pattern).
+
+## Pinpoint #191. `claw skills install /bad/path` classified as `unknown` instead of `filesystem` — FILED (cycle #108, 2026-04-23 11:40 Seoul)
+
+**Gap.** Same pattern as prior filesystem classifier gaps (#177-#179):
+
+```bash
+claw skills install /tmp/bogus.tar.gz
+# Current: kind=unknown, error="No such file or directory"
+# Expected: kind=filesystem or kind=filesystem_io_error
+```
+
+**Family:** Typed-error classifier, filesystem sub-lineage (#177/#178/#179).
+
+**Bundle:** Could bundle with #177/#178/#179 install-surface taxonomy (4 members → 5).
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+## Probe 5: skills install --bogus-flag classifier gap — FILED as #189+1 (cycle #108, 2026-04-23 11:40 Seoul)
+
+Wait, let me check if this is another classifier gap or if it's covered:
+
+```bash
+claw skills install --bogus-flag
+# (testing now)
+```
+
+Cycle #108 summary coming up.
+
+## Pinpoint #192. `claw skills install --bogus-flag` classified as `unknown` instead of `cli_parse` — FILED (cycle #108, 2026-04-23 11:40 Seoul)
+
+**Gap.** Same pattern as #186-#189 unknown-option sub-lineage:
+
+```bash
+claw skills install --bogus-flag
+# Current: kind=unknown
+# Expected: kind=cli_parse
+```
+
+**Family:** Typed-error classifier, unknown-option sub-lineage. Now at 4 members: #186, #187, #189, #192.
+
+**Bundle:** Extend `feat/jobdori-186-189-classifier-sweep` to `feat/jobdori-186-192-classifier-sweep` (4 verbs).
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+## Cycle #108 Summary (Final Pre-Phase-1 Probe)
+
+**Probe focus:** `claw skills` install/enable/disable lifecycle (deepest unaudited surface).
+
+**Yield:** 3 pinpoints from one verb family:
+- #190: Design decision needed (help-routing for no-args install)
+- #191: Classifier gap (filesystem sub-lineage)
+- #192: Classifier gap (unknown-option sub-lineage, +1 to count)
+
+**Cross-surface pattern:** Complex sub-verbs (install, enable, enable-plugins) have more classifier gaps than simple verbs (list, show).
+
+**Pinpoint count:** 82 filed (+3 from cycle #108), 67 genuinely open.
+
+**Branch:** `feat/jobdori-168c-emission-routing` @ 37 commits (freeze held).
+
+**Status:** All unaudited surfaces now probed (cycles #104-#108: plugins, agents, init, bootstrap-plan, system-prompt, export, sandbox, dump-manifests, skills). Phase 1 execution can begin once Phase 0 merges.
