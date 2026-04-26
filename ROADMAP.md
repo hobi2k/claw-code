@@ -17466,3 +17466,29 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Report: reachable/unreachable, auth-valid/auth-invalid, rate-limited/available
 - Integration with #292 escalation: `claw doctor` output could suggest "provider X appears degraded, consider fallback Y"
 - Regression test asserting provider-check path exists when flag is passed
+
+---
+
+### #294 — First-run onboarding has no guided setup flow
+
+**Exact pinpoint:** A new user who installs claw-code and runs `claw` without any env vars set gets an auth error or cryptic failure with no guidance on what to configure. There is no `claw setup` command, no interactive wizard, no `--init` flag, no first-run detection, and no clear "here is what you need to set up first" message. The user must read documentation (if they find it) to discover the required env var names, provider options, and settings.json location.
+
+**Live evidence:**
+- PR claw-code#2810 opened 2026-04-27 04:09 KST: "feat: interactive provider wizard (/setup, claw setup, Ctrl+P)" — independent implementation evidence that this is a recognized pain point
+- docs/CONFIGURATION.md (cycle #429) had to document 13+ env vars from source grep — none of these are surfaced to new users at runtime
+- `claw doctor` (per #293) validates config but does not GUIDE setup
+
+**Why distinct:**
+- #285 (declarative providers config) — covers config SOURCE-OF-TRUTH (env-vs-settings.json), NOT onboarding UX
+- #245/#246 (declarative config, backend swap) — covers config structure, NOT first-run flow
+- #293 (claw doctor provider health) — covers diagnostic tooling, NOT initial setup guidance
+- PR #2810 implementation — implementation in progress, but pinpoint captures the discovery axis and acceptance criteria
+
+**Concrete delta landed:** ROADMAP.md appended with #294; PR #2810 cross-referenced.
+
+**Fix shape recorded:**
+- `claw setup` / `claw init` command: interactive wizard (like PR #2810 proposes)
+- First-run detection: if no API key configured AND no settings.json, show guided setup prompt
+- Minimal setup path: detect provider intent from model flag (e.g., `claw --model claude-*` → prompt for `ANTHROPIC_API_KEY`)
+- `claw doctor --setup` mode: not just validation but guided remediation
+- Acceptance: `claw` with no config shows actionable setup guidance, not an opaque auth error
