@@ -17515,3 +17515,30 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - `claw status` includes upstream divergence count (like `git status` shows `Your branch is behind by N commits`)
 - `claw doctor` checks: worktree staleness as part of health check
 - Integration with #38: marker file could include last-sync timestamp
+
+---
+
+### #296 — Tests have implicit brittleness assumptions during high-concurrency dogfood
+
+**Exact pinpoint:** During extended dogfood audit (13+ hours, continuous subagent cycles with git rebasing, worktree syncing, parallel session management), several test categories show potential brittleness: (1) Timing-sensitive tests in `test_run_turn_loop_timeout.py` and `test_run_turn_loop_cancellation.py` use hard-coded wall-clock values (e.g. `timeout_seconds=0.2`, `time.sleep(0.05)`, `assert elapsed < 1.5`) that assume a lightly-loaded machine — under sustained CI or dogfood concurrency these margins can flip; (2) Session state not cleaned via pytest fixtures — tests use `unittest.TestCase` pattern without `addCleanup` or `tearDown` for session files; (3) CLI parity test explicitly `skip`s `delete-session`/`load-session` and `flush-transcript` sub-commands, leaving state-sensitive paths untested; (4) No `cargo test -- --test-threads=1` enforcement for Rust side, meaning parallel test execution could race on shared filesystem state (worktree markers, .claw directories). Tests pass in isolation but brittleness risk is evident under sustained load.
+
+**Live evidence:**
+- Extended audit cycles #410-#438 exercised test suite under continuous branching/rebasing/sync stress
+- `test_run_turn_loop_cancellation.py:109` — `timeout_seconds=0.2` with `time.sleep(0.05)` mock: 4x margin disappears under load
+- `test_run_turn_loop_timeout.py:72` — `assert elapsed < 1.5` with `timeout_seconds=0.3`: assumes 5x scheduling headroom
+- `test_cli_parity_audit.py:206,216` — explicit skip comments for state-dependent commands
+- No `@pytest.fixture` teardown discovered in any test file — session/file state can leak between runs
+
+**Why distinct:**
+- #286 (agent thread no-heartbeat) — covers runtime parallel agent lifecycle, NOT test isolation
+- #38 (claw new worktree invisibility) — covers worktree discovery gap, NOT test cleanup
+- #287 (auto-compaction timing) — covers production behaviour, NOT test timing assumptions
+
+**Concrete delta landed:** ROADMAP.md appended with #296.
+
+**Fix shape recorded:**
+- Replace hard-coded timing margins with `pytest-timeout` + environment-aware multiplier (`CI=1` → 3x margin)
+- Add `@pytest.fixture(autouse=True)` session teardown in conftest.py — clean up `.claw/` and session files post-test
+- Un-skip `delete-session`/`load-session`/`flush-transcript` with proper tmp_path fixtures
+- Rust CI: add `-- --test-threads=1 --nocapture` flag for brittleness detection under dogfood concurrency
+- Add `pytest-repeat` run in CI (`--count=3`) to surface non-deterministic failures early
