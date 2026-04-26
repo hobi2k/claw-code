@@ -17441,3 +17441,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - regression tests for tier escalation transitions
 
 **Branch / parity:** local==origin==fork at 7a022b6
+
+---
+
+### #293 — `claw doctor` does not check provider health/reachability
+
+**Exact pinpoint:** `claw doctor` validates local configuration (API keys present, settings.json parseable, etc.) but does NOT ping the configured provider endpoint to verify: (1) network reachability, (2) authentication validity, (3) model availability, (4) rate-limit status. During sustained upstream degradation (e.g., 20+ `500 empty_stream` failures over 9+ hours), users have no diagnostic tool to distinguish "my config is wrong" from "the provider is down."
+
+**Live evidence:**
+- gaebal-gajae's session hit `500 empty_stream` 20+ times across 9+ hours (2026-04-26 21:04 KST ~ 2026-04-27 06:33 KST)
+- No `claw doctor` check could have detected upstream unavailability
+- Users had to manually check status.anthropic.com or guess
+
+**Why distinct:**
+- #122b (claw doctor broad-path warning) — fixed a specific warning message, did NOT add provider health checks
+- #292 (extreme-sustained-degradation escalation) — covers runtime escalation during conversation, NOT pre-flight diagnostics
+- #291 (repeat-failure circuit-breaker) — covers runtime circuit-breaking, NOT diagnostic tooling
+
+**Concrete delta landed:** ROADMAP.md appended with #293.
+
+**Fix shape recorded:**
+- `claw doctor --check-providers` flag (opt-in to avoid slow startup)
+- Lightweight provider ping: send minimal request (e.g., `models/list` or single-token completion) to each configured provider
+- Report: reachable/unreachable, auth-valid/auth-invalid, rate-limited/available
+- Integration with #292 escalation: `claw doctor` output could suggest "provider X appears degraded, consider fallback Y"
+- Regression test asserting provider-check path exists when flag is passed
