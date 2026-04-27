@@ -17560,3 +17560,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 | Tool-result atomic writes | Design phase (#254/#268/#274) | Live (MCP refresh) | Phase C: Implement tool lifecycle |
 | Session persistence versioning | Design phase (#278/#279) | Live (migrations) | Phase D: Implement persistence |
 | CLI `--max-turns` / `--cwd` | Design phase (#262/#267/#272) | Live (flexible dispatch) | Phase E: Implement dispatch |
+
+### #297 — MCP plugin connection crash has no mid-session graceful recovery
+
+**Exact pinpoint:** When an external MCP server process dies, drops its connection, or times out during an active claw-code session, there is no recovery mechanism: the session hangs or errors with no user-facing guidance, no retry attempt, no graceful degradation to built-in tools, and no notification that tool availability has changed. Users must manually restart the MCP server and re-launch claw-code.
+
+**Live evidence:**
+- Clawhip nudge prompt explicitly lists "MCP/plugin lifecycle breakage" as a priority discovery area across all cycles
+- Extended dogfood audit (14+ hours) exercised multi-process environments where MCP server stability is a real concern
+- No `reconnect`, `retry`, or `mcp.*error` recovery logic found in `rust/crates/` source
+
+**Why distinct:**
+- #280 (MCP crate refresh) — covers dependency/API update, NOT runtime connection recovery
+- #254 (tool-result atomic writes) — covers result delivery durability, NOT connection lifecycle
+- #268 (tool rendering parity) — covers output display, NOT plugin connection management
+- #286 (agent background thread lifecycle) — covers agent threads, NOT external MCP process lifecycle
+
+**Concrete delta landed:** ROADMAP.md appended with #297.
+
+**Fix shape recorded:**
+- MCP connection health monitor: periodic heartbeat to MCP server (ping/pong or lightweight probe)
+- Graceful degradation: on connection loss, mark affected tools as unavailable, notify user, continue with remaining tools
+- Retry with backoff: attempt reconnection up to N times before surfacing error
+- User notification: `[MCP: <server-name> disconnected — retrying (1/3)]` style status message
+- `claw doctor --mcp` checks: validate all configured MCP servers are reachable
+- Integration with #293 (claw doctor provider health): unified health-check command
