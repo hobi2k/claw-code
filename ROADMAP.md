@@ -17912,3 +17912,26 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Use `clap`'s early exit on help: `#[command(help_template = "...")]` and `after_help_fn` should run before provider load
 - Acceptance: `claw run --help` exits cleanly with help text, no auth prompt; `claw status --help` same
 - Regression: no auth path should execute when any `--help` or `-h` is in args
+
+### #311 — `settings.json` validation gives opaque errors on bad JSON or unknown fields
+
+**Exact pinpoint:** When `settings.json` contains: (1) invalid JSON syntax (missing comma, unclosed brace), (2) unknown field names (typo like `proivder` instead of `provider`), (3) wrong value type (string where number expected), the resulting error message is likely a raw serde deserialization error with no: file path reference, line/column indicator, field-name suggestion (did you mean?), or link to configuration documentation. Users must guess which part of their config is wrong.
+
+**Live evidence:**
+- docs/CONFIGURATION.md (cycle #429) had to document 13+ env vars and settings.json fields from source grep — no validation schema exposed to users
+- `serde_json` deserialization errors are typically: `Error("unknown field `xyz`", line 3, column 12)` with no actionable suggestion
+- No `jsonschema` validation, no `#[serde(deny_unknown_fields)]` confirmation, no friendly error formatter found in source
+
+**Why distinct:**
+- #293 (claw doctor provider health) — covers provider reachability, NOT config file syntax
+- #246 (provider selection config integration) — covers config source-of-truth, NOT error UX
+- #309 (--help discoverability) — covers help text quality, NOT validation feedback
+
+**Concrete delta landed:** ROADMAP.md appended with #311.
+
+**Fix shape recorded:**
+- Use `#[serde(deny_unknown_fields)]` on Settings struct to catch typos
+- Custom error formatter: include file path, line/column (from serde_json's `Error::line()`), and known-field suggestions for unknown-field errors
+- Schema export: `claw config --schema` emits JSON Schema for settings.json (enables IDE validation)
+- `claw doctor` config check: validate settings.json against schema before session start
+- CONFIGURATION.md: add "Common Configuration Errors" section with examples
