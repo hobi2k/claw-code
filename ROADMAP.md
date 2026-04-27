@@ -17764,7 +17764,7 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 
 ---
 
-### #302 — `/compact` has no dry-run or preview mode before irreversible compaction
+### #305 — `/compact` has no dry-run or preview mode before irreversible compaction
 
 **Exact pinpoint:** When a user runs `/compact`, the operation executes immediately with no preview of: (1) which messages/turns will be removed, (2) how much context will be freed, (3) what summary will replace the removed turns, (4) estimated new token count post-compaction. Compaction is effectively irreversible within a session — there is no `/compact --dry-run` or `/compact --preview` that shows the plan before committing. Users discover the compaction result only after it has already modified session state.
 
@@ -17779,7 +17779,7 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - #288 (auto-compaction preflight check) — covers pre-session check, NOT interactive preview
 - Q's #303 (silent log rotation) — covers log file deletion, NOT in-session compaction preview
 
-**Concrete delta landed:** ROADMAP.md appended with #302.
+**Concrete delta landed:** ROADMAP.md appended with #305 (renumbered from #302).
 
 **Fix shape recorded:**
 - `/compact --dry-run`: show compaction plan (turns to remove, context freed, summary preview) without executing
@@ -17791,4 +17791,4 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 
 **Source:** Dogfood cycle #447 (2026-04-27 10:31 KST) — discovered via grep trace of `rust/crates/runtime/src/compact.rs` + `mock-anthropic-service` (HEAD d01ebd3), branch `feat/jobdori-168c-emission-routing`
 
-**Note:** This entry was initially filed with number #302 (collision with the `status JSON usage` pinpoint above). Renumbered to #304 at 2026-04-27 10:53 KST status cycle.
+**Note:** This entry was initially filed with number #302 (collision with the `status JSON usage` pinpoint above). Renumbered to #305 at 2026-04-27 10:59 KST merge sync (dogfood #448).
