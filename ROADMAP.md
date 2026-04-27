@@ -17935,3 +17935,27 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Schema export: `claw config --schema` emits JSON Schema for settings.json (enables IDE validation)
 - `claw doctor` config check: validate settings.json against schema before session start
 - CONFIGURATION.md: add "Common Configuration Errors" section with examples
+
+### #312 — No context window saturation warning before token limit is hit
+
+**Exact pinpoint:** When a `claw` session accumulates enough messages to approach the provider's context window limit (e.g., 200k tokens for Anthropic Claude), there is no proactive user-visible warning before: (1) the API returns a `context_length_exceeded` error, or (2) the provider silently truncates/drops early messages. The user has no visibility into context budget consumption during normal operation. The session fails or degrades without warning.
+
+**Live evidence:**
+- Extended dogfood audit (16+ hours, 62 pinpoints over 457 cycles): long-running `clawcode-human` session accumulated substantial context without any saturation indicator visible in the UI
+- No `tokens_used` / `context_window_remaining` display found in source
+- Providers return `usage.input_tokens` in API responses — this data is available but not surfaced to the user
+
+**Why distinct:**
+- #298 (event/log opacity) — covers structured log FORMAT, NOT context budget visibility
+- #283/#287/#288/#289/#305 (auto-compaction) — cover AUTOMATIC compaction trigger, NOT proactive saturation warning to the user
+- #290 (stream-init error envelope) — covers upstream stream closure, NOT context length errors
+
+**Concrete delta landed:** ROADMAP.md appended with #312.
+
+**Fix shape recorded:**
+- Track `usage.input_tokens` from each API response; maintain running total per session
+- Threshold warnings: at 70% capacity → subtle status indicator; at 85% → inline warning "Context at 85% — consider /compact"; at 95% → prominent warning "Context near limit — /compact recommended"
+- Display in status bar or as inline system message
+- `/status` command: include `Context: 142k/200k (71%)` field
+- Acceptance: user can observe context growth; prompted to compact before error
+- Cross-ref: #305 (/compact dry-run), auto-compaction cluster (#283-#289)
