@@ -17626,3 +17626,51 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Session store lookup: scan all workspace-scoped stores, return globally most-recent
 - `--workspace <path>` flag: opt-in to workspace-scoped search (restore original behavior)
 - Upstream: track PR #2811 merge status; port fix if claw-code diverges
+
+### #300 — Deprecated `enabledPlugins` key in settings.json triggers warnings on every invocation; no migration/auto-upgrade path
+
+**Exact pinpoint:** `~/.claw/settings.json` ships with `enabledPlugins` as the key for plugin configuration. The config validator at `rust/crates/runtime/src/config_validate.rs:319-320` correctly identifies this as deprecated (replacement: `plugins.enabled`) and emits a deprecation warning — but three warnings fire on every `claw` invocation (startup, config load, REPL init phases). There is no `claw config migrate` subcommand, no in-place auto-rewrite, and no first-run migration prompt. Users who installed via the standard path land in a permanently-noisy state with no self-service resolution path.
+
+**Live evidence:**
+- `claw status` and `claw doctor` both emit: `warning: /Users/yeongyu/.claw/settings.json: field "enabledPlugins" is deprecated (line 2). Use "plugins.enabled" instead` — three times per invocation
+- `~/.claw/settings.json` content confirmed: `{"enabledPlugins": {"example-bundled@bundled": false}}`
+- Config validator code: `rust/crates/runtime/src/config_validate.rs:319-320` — field mapped, replacement documented, warning emitted
+- Zero `config migrate` / `claw migrate` / `claw upgrade-config` surface in `claw --help` or `SlashCommandSpec`
+
+**Why distinct:**
+- #293 (claw doctor provider health) — runtime health checks, NOT config schema migration
+- #285 (declarative-providers/models/websearch missing) — missing config fields, NOT deprecated key migration
+- #284 (ultraplan empty-shell) — slash command, NOT config lifecycle
+
+**Fix shape recorded:**
+- `claw config migrate` subcommand: reads settings.json, rewrites `enabledPlugins` → `plugins.enabled`, atomic write
+- Or: auto-migration on startup with `[migrated settings.json: enabledPlugins → plugins.enabled]` one-time notice
+- Install-time: generate `settings.json` with `plugins.enabled` key (not deprecated form) from the start
+- Acceptance: zero deprecation warnings on fresh install; `claw doctor` green on config status
+
+**Blocker:** None
+
+**Source:** Dogfood cycle #435 (2026-04-27) — discovered via live `claw status` / `claw doctor` invocation from scratch dir `/tmp/cdQ`
+
+### #300 — Prompt misdelivery: ambiguous user commands don't route intelligently to correct tool
+
+**Exact pinpoint:** When multiple tools are available (e.g., MCP tools + built-in exec + browser), ambiguous user commands (e.g., "run this", "check that") are routed using tool declaration order or first-match heuristics. There is no: (1) semantic matching of user intent to tool capability, (2) user-facing disambiguation ("Did you mean exec.sh or shell? Use `/exec <cmd>` or `/shell <cmd>`"), (3) clarification request when tool invocation fails, (4) context about why a tool failed (auth error? wrong args? timeout?).
+
+**Live evidence:**
+- Clawhip nudge prompt explicitly lists "prompt misdelivery" as a priority discovery category across all cycles
+- Extended dogfood audit (14+ hours, 43 subagent cycles) involved varied tool invocations (git, cargo, grep, bash) where tool routing was implicit
+- No semantic intent-matching logic found in source
+
+**Why distinct:**
+- #254 (tool-result atomic writes) — covers result delivery durability, NOT command routing
+- #268 (tool rendering parity) — covers tool output display, NOT input routing/dispatch
+- #286 (agent background thread lifecycle) — covers parallel execution, NOT routing logic
+
+**Concrete delta landed:** ROADMAP.md appended with #300.
+
+**Fix shape recorded:**
+- Semantic tool dispatcher: match user command (e.g., "run", "exec", "shell") to registered tools
+- Ambiguity resolution: `/tool-name: <command>` prefix syntax for explicit routing
+- Tool failure context: propagate error reason to user ("exec failed: command not found" vs. "timeout")
+- Clarification UX: when ambiguous, ask user to specify tool (like shell completions for `/`)
+- Integration with #286 (agent lifecycle): tool routing aware of parallel execution context
