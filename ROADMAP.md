@@ -17865,3 +17865,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Implement: map error variants to exit codes in `main.rs`
 - Acceptance: `claw run ... ; echo $?` returns distinct codes per failure category
 - CI integration: `if [ $? -eq 4 ]; then retry; fi` pattern becomes viable
+
+### #309 — `claw --help` subcommand help chain has gaps; no man page
+
+**Exact pinpoint:** Several `claw` subcommands lack descriptive `about` text in their `#[command]` annotation, resulting in terse or empty help output when a user runs `claw <subcommand> --help`. Additionally: (1) no man page (`claw.1`) is generated or installed, (2) some flags lack `long_help` descriptions beyond the short `help` string, (3) flag groupings (`help_heading`) are not used to organize output for complex subcommands like `run`. New users relying on `--help` for discovery hit a wall.
+
+**Live evidence:**
+- Startup friction: new user's first action after install is `claw --help`; terse/missing descriptions create immediate friction
+- Extended audit (16+ hours): subcommand flags discovered via source-reading rather than `--help` output
+- No `.1` man page files found in repository
+- `clap` supports `long_about`, `help_heading`, `long_help`, `after_help` — none confirmed in use
+
+**Why distinct:**
+- #294 (first-run onboarding wizard) — covers guided interactive setup, NOT CLI help text
+- #307 (shell completion) — covers tab completion, NOT help text quality
+- #301 (binary distribution) — covers install friction, NOT help discoverability
+
+**Concrete delta landed:** ROADMAP.md appended with #309.
+
+**Fix shape recorded:**
+- Add `long_about` to all subcommands: one-paragraph description with examples
+- Add `long_help` to complex flags (`--output-format`, `--provider`, `--model`)
+- Use `help_heading` to group flags by category (Output, Provider, Session, Debug)
+- Generate man page: `clap_mangen` crate in `build.rs` → `target/man/claw.1`
+- USAGE.md: add "Getting Help" section
+- Acceptance: `claw run --help` shows full flag descriptions with examples; `man claw` works after install
