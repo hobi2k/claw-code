@@ -17975,3 +17975,31 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - #298 (log opacity) — covers structured log FORMAT, NOT interactive `/status`
 
 **Concrete delta landed:** ROADMAP.md appended with #313.
+
+### #314 — `claw lanes` stub response indistinguishable from live zero-lane state
+
+**Exact pinpoint:** `claw lanes --output-format json` returns empty or a stub sentinel with no field distinguishing "no lanes currently running" from "command not yet wired/implemented." Operators and CI cannot tell if the tool is live or still a stub without reading source. A CI guard keyed on `claw lanes` output cannot reliably block merges while the command is a stub.
+
+**dogfood context:** HEAD `a6fdf12`, scratch `/tmp/cdL` (ephemeral cron check), 2026-04-27
+
+**Concrete repro:**
+```
+$ claw lanes --output-format json
+# returns empty JSON or {} — identical to "zero active lanes" live state
+# no "stub" or "implementation" field present
+```
+
+**Trace path:** `claw-code-worktrees/providers/src/` — `claw lanes` reads opencode JSONL; stub returns empty collection without an implementation sentinel.
+
+**Why clawability gap:**
+1. CI guard proposed in #195 (b5 swarm visibility) cannot reliably block on an indeterminate empty response
+2. Operators starting fresh sessions see "zero lanes" and assume `claw lanes` is live — false confidence
+3. No way to distinguish "quiet system" from "broken tool" without source inspection
+
+**Fix shape:** Add `"stub": true` field to empty response until live read (#30) is wired; remove flag post-implementation; add regression test asserting absence after go-live. ~20 LOC.
+
+**Acceptance:** `claw lanes --output-format json` returns `{ "stub": true }` or `{ "implementation": "stub" }` until #30 is live; once live, field is absent and CI asserts it.
+
+**Blocker:** None — additive.
+
+**Source:** Jobdori cron dogfood check 2026-04-27, cross-ref #195 (b5 swarm visibility), #30 (claw lanes live read), #39 (sentinel gap).
