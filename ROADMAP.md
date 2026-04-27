@@ -17890,3 +17890,25 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Generate man page: `clap_mangen` crate in `build.rs` → `target/man/claw.1`
 - USAGE.md: add "Getting Help" section
 - Acceptance: `claw run --help` shows full flag descriptions with examples; `man claw` works after install
+
+### #310 — `<subcommand> --help` accidentally enters runtime/auth path instead of returning help-only
+
+**Exact pinpoint:** Running `claw <subcommand> --help` should return subcommand help text without triggering any runtime initialization, provider authentication, or credential loading. If the current implementation calls `load_provider()`, `authenticate()`, or similar auth-path code to generate help output, that is a bug. Help is metadata-only and should be generated before any provider interaction.
+
+**Live evidence:**
+- gaebal-gajae's live observation during dogfood: `--help` unexpectedly prompted for auth/credentials
+- Help is read-only metadata; there is no reason to load or authenticate a provider just to print help text
+- Likely cause: early help parsing happens after provider initialization in `main()` call sequence
+
+**Why distinct:**
+- #309 (help text gaps) — covers help TEXT DEPTH/STRUCTURE, NOT auth-triggering behavior
+- #293 (claw doctor health check) — covers health diagnostics, NOT help path
+- #294 (first-run onboarding) — covers guided setup, NOT help path auth
+
+**Concrete delta landed:** ROADMAP.md appended with #310.
+
+**Fix shape recorded:**
+- Reorder `main.rs`: parse `--help`/`--version` flags BEFORE any provider/auth initialization
+- Use `clap`'s early exit on help: `#[command(help_template = "...")]` and `after_help_fn` should run before provider load
+- Acceptance: `claw run --help` exits cleanly with help text, no auth prompt; `claw status --help` same
+- Regression: no auth path should execute when any `--help` or `-h` is in args
