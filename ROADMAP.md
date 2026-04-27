@@ -18003,3 +18003,41 @@ $ claw lanes --output-format json
 **Blocker:** None — additive.
 
 **Source:** Jobdori cron dogfood check 2026-04-27, cross-ref #195 (b5 swarm visibility), #30 (claw lanes live read), #39 (sentinel gap).
+
+### #315 — `lane_events.rs` defines `LaneEventName` enum but no emission path is wired
+
+**Exact pinpoint:** `runtime/src/lane_events.rs` defines a 20-variant `LaneEventName` enum (lane.started through lane.closed, ship.* provenance events) and `LaneEventStatus`, but no `emit()` path, event bus, or subscriber registration exists in the runtime. Events are constructed but never dispatched. This is the root cause of #314: `claw lanes` always returns empty because the emission routing is a stub — there is no sink to write to and no reader to query.
+
+**dogfood context:** HEAD `2b04120`, branch `feat/jobdori-168c-emission-routing`, cron dogfood check 2026-04-27 18:14 KST
+
+**Concrete repro:**
+```
+$ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
+# shows: enum defined in runtime/src/lane_events.rs
+# referenced in tools/src/lib.rs and rusty-claude-cli/src/main.rs
+# NO emit(), NO EventBus, NO subscriber, NO JSONL writer
+```
+
+**Trace path:**
+- Enum: `runtime/src/lane_events.rs:1-80`
+- Reference: `tools/src/lib.rs` (LaneEventName import, never emitted)
+- `claw lanes` read path: absent (no `.claw/lane-events.jsonl` writer)
+
+**Why clawability gap:**
+1. Root cause of #314 (stub indistinguishable from live zero-lane state)
+2. Branch name `feat/jobdori-168c-emission-routing` implies this was in-scope but not landed
+3. All lane lifecycle observability (#195, #296, #298, #302) is blocked until emission is wired
+4. CI guards proposed in #195 cannot function without a real event stream
+
+**Fix shape:**
+- Define `LaneEventSink` trait in `runtime/`; provide JSONL file-backed impl writing to `.claw/lane-events.jsonl`
+- Wire sink into `ConversationManager` state transitions (tool dispatch, completion, error)
+- `claw lanes` reads `.claw/lane-events.jsonl`, aggregates by lane ID, returns live state
+- Remove `"stub": true` sentinel from #314 once live
+- ~60 LOC runtime + ~30 LOC CLI read path
+
+**Acceptance:** `claw lanes` returns non-empty JSON for an active session; lane lifecycle events (started/ready/finished/failed) appear in `.claw/lane-events.jsonl`; `--output-format json` `"stub"` field absent; CI guard asserts absence.
+
+**Blocker:** None — additive. Cross-ref: #314 (stub sentinel), #195 (b5 swarm visibility), #296/#298/#302 (observability cluster).
+
+**Source:** Jobdori cron dogfood check 2026-04-27 18:14 KST, cross-ref lane_events.rs grep + branch name analysis.
