@@ -18085,3 +18085,5 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Fix shape:** Subscribe to tmux pane exit events (`tmux wait-for` or `pane-died` hook); automatically deregister/stop monitoring when the pane exits or the session inside it completes. Alternatively, track the last-seen line offset and only match new output. ~20 LOC in Clawhip tmux monitor. Related: #318 (keyword string-match gate).
 
 **Blocker:** None — fully additive. High priority: stale alert floods destroy operator trust in the monitoring system.
+
+**See also:** #257 (completed OMX sessions emit stale alerts) — #319 is additional live evidence strengthening the same gap via Clawhip tmux monitor specifically.
