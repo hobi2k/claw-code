@@ -18041,3 +18041,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Blocker:** None — additive. Cross-ref: #314 (stub sentinel), #195 (b5 swarm visibility), #296/#298/#302 (observability cluster).
 
 **Source:** Jobdori cron dogfood check 2026-04-27 18:14 KST, cross-ref lane_events.rs grep + branch name analysis.
+
+### #316 — MCP transport-death + approval-loop coupling post-#200
+
+**Axis:** MCP/plugin lifecycle breakage
+**Evidence:** gaebal-gajae live `clawcode-human` session 2026-04-28; after ROADMAP #200 landed structured permission blockers, worker correctly detected transport-death but still stalled on interactive "Would you like to run…" approval prompt requiring manual Enter confirmation.
+
+**Gap:** `TransportDead` typed blocker is now emitted (#200), but the approval-loop surface is not wired to auto-resolve or bypass on definitive transport failure. The human operator must poke through the prompt even when the transport is structurally dead and cannot recover without restart.
+
+**Fix shape:** Wire `TransportDead` blocker → automatic recovery attempt (restart transport, re-register MCP server) OR explicit `--non-interactive` bypass that emits a structured `approval_bypassed` event instead of stalling. ~40 LOC in `recovery_recipes.rs` + `worker_boot.rs`. Additive to #200.
+
+**Blocker:** None — fully additive.
