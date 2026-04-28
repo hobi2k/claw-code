@@ -18074,3 +18074,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Fix shape:** Replace string-match gate with structured state check: `git diff --exit-code && cargo check && cargo fmt --check` before emitting `COMMIT_READY` event. Or require a sentinel on a dedicated line with a structured prefix (e.g., `[CLAW:COMMIT_READY]`) that the agent must explicitly emit. ~10 LOC in Clawhip tmux monitor.
 
 **Blocker:** None — fully additive. High priority: false positives destroy operator trust in gate signals.
+
+### #319 — Clawhip tmux monitor continues polling completed/killed sessions (stale alert flood)
+
+**Axis:** Event/log opacity / MCP/plugin lifecycle breakage
+**Evidence:** gaebal-gajae live sessions 2026-04-28 14:39-14:46 KST; after killing `claw-code-issue-1777354364-new-commits` and `claw-code-issue-317-intent-guard-compile-fix`, Clawhip tmux monitor continued firing keyword alerts sourced from old pane scroll-history. Sessions were dead but monitor kept re-scanning their tmux buffer history, producing floods of stale `error`/`ACTUAL_PUSHED`/`COMMIT_READY` alerts for minutes after session termination. Operator had to manually kill the pane to stop the flood.
+
+**Gap:** Clawhip tmux monitor has no session lifecycle awareness — it does not deregister a monitored pane when the session inside it is killed or exits. It continues polling the tmux pane's scroll-back buffer indefinitely, re-matching keywords from historical output. This produces alert floods indistinguishable from live failures.
+
+**Fix shape:** Subscribe to tmux pane exit events (`tmux wait-for` or `pane-died` hook); automatically deregister/stop monitoring when the pane exits or the session inside it completes. Alternatively, track the last-seen line offset and only match new output. ~20 LOC in Clawhip tmux monitor. Related: #318 (keyword string-match gate).
+
+**Blocker:** None — fully additive. High priority: stale alert floods destroy operator trust in the monitoring system.
