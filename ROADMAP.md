@@ -18063,3 +18063,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Fix shape:** Add `session_scope` metadata (project dir, task ID, or explicit scope tag) to session init; validate incoming prompt against scope before acceptance post-recovery. Reject or quarantine out-of-scope prompts with a typed `OutOfScopePrompt` event. ~30 LOC in session init + prompt dispatch path. Closely related to #316 (transport-death recovery) and #300 (prompt misdelivery).
 
 **Blocker:** None — fully additive.
+
+### #318 — Clawhip `COMMIT_READY` gate triggers on prompt string match, not actual commit/CI state
+
+**Axis:** Event/log opacity / test brittleness
+**Evidence:** gaebal-gajae live `claw-code-issue-1777354364-new-commits` 2026-04-28 14:36-14:37 KST; Clawhip tmux monitor fired `COMMIT_READY` 3 consecutive times based on the string "COMMIT_READY" appearing in session output/prompt text. Real state each time: uncommitted files, `cargo fmt --check` failing, compile errors. No actual commit existed.
+
+**Gap:** `COMMIT_READY` gate uses naive string matching on tmux pane output instead of verifying actual git state (`git status`, `cargo check`, `cargo fmt --check`). This produces false positives whenever the agent echoes the gate keyword while describing its intent or reading instructions. Three false positives in one session destroyed two clean lanes.
+
+**Fix shape:** Replace string-match gate with structured state check: `git diff --exit-code && cargo check && cargo fmt --check` before emitting `COMMIT_READY` event. Or require a sentinel on a dedicated line with a structured prefix (e.g., `[CLAW:COMMIT_READY]`) that the agent must explicitly emit. ~10 LOC in Clawhip tmux monitor.
+
+**Blocker:** None — fully additive. High priority: false positives destroy operator trust in gate signals.
