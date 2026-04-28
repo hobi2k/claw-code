@@ -1,0 +1,44 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# shellcheck disable=SC1091
+. "$ROOT/scripts/local-model-common.sh"
+
+local_model_load_env "$ROOT"
+local_model_profile
+local_model_resolve_backend
+
+if [ "${1:-}" = "--print" ]; then
+  local_model_print
+  CLAW_BIN=${LOCAL_CLAW_BIN:-rust/target/debug/claw}
+  case "$CLAW_BIN" in
+    /*) CLAW_PRINT_PATH=$CLAW_BIN ;;
+    *) CLAW_PRINT_PATH=$ROOT/$CLAW_BIN ;;
+  esac
+  printf 'command=cd %s/rust && OPENAI_BASE_URL=%s %s --model %s\n' "$ROOT" "$LOCAL_RESOLVED_BASE_URL" "$CLAW_PRINT_PATH" "$LOCAL_RESOLVED_MODEL"
+  exit 0
+fi
+
+export OPENAI_BASE_URL=$LOCAL_RESOLVED_BASE_URL
+if [ -n "$LOCAL_RESOLVED_API_KEY" ]; then
+  export OPENAI_API_KEY=$LOCAL_RESOLVED_API_KEY
+else
+  unset OPENAI_API_KEY
+fi
+
+CLAW_BIN=${LOCAL_CLAW_BIN:-rust/target/debug/claw}
+case "$CLAW_BIN" in
+  /*) CLAW_PATH=$CLAW_BIN ;;
+  *) CLAW_PATH=$ROOT/$CLAW_BIN ;;
+esac
+
+if [ ! -x "$CLAW_PATH" ]; then
+  printf 'claw binary not found: %s\n' "$CLAW_PATH" >&2
+  printf 'Build it first: cd rust && cargo build --workspace\n' >&2
+  exit 1
+fi
+
+PERMISSION_MODE=${LOCAL_CLAW_PERMISSION_MODE:-workspace-write}
+cd "$ROOT/rust"
+exec "$CLAW_PATH" --permission-mode "$PERMISSION_MODE" --model "$LOCAL_RESOLVED_MODEL" "$@"

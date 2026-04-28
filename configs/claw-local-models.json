@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "claw-code local model profiles. This config is intentionally separate from upstream claw-code source so frequent upstream updates do not collide with local model work.",
+  "profiles": {
+    "gemma-4-e4b": {
+      "name": "Gemma 4 E4B IT",
+      "hfModel": "google/gemma-4-E4B-it",
+      "defaultApiModel": "google/gemma-4-E4B-it",
+      "recommendedBackend": "openai-compatible",
+      "notes": "Use with a local OpenAI-compatible server that exposes this model id or an alias through /v1/chat/completions."
+    },
+    "gemma-4-e2b": {
+      "name": "Gemma 4 E2B IT",
+      "hfModel": "google/gemma-4-E2B-it",
+      "defaultApiModel": "google/gemma-4-E2B-it",
+      "recommendedBackend": "openai-compatible",
+      "notes": "Smaller Gemma 4 profile for lighter local machines."
+    },
+    "qwen-coder-7b": {
+      "name": "Qwen2.5 Coder 7B Instruct",
+      "hfModel": "Qwen/Qwen2.5-Coder-7B-Instruct",
+      "ollamaModel": "qwen2.5-coder:7b",
+      "defaultApiModel": "qwen2.5-coder:7b",
+      "recommendedBackend": "ollama",
+      "notes": "Recommended local coding default when available."
+    },
+    "qwen-coder-3b": {
+      "name": "Qwen2.5 Coder 3B Instruct",
+      "hfModel": "Qwen/Qwen2.5-Coder-3B-Instruct",
+      "ollamaModel": "qwen2.5-coder:3b",
+      "defaultApiModel": "qwen2.5-coder:3b",
+      "recommendedBackend": "ollama",
+      "notes": "Good laptop profile when 7B is too heavy."
+    },
+    "qwen-coder-1.5b": {
+      "name": "Qwen2.5 Coder 1.5B Instruct",
+      "hfModel": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+      "ollamaModel": "qwen2.5-coder:1.5b",
+      "defaultApiModel": "qwen2.5-coder:1.5b",
+      "recommendedBackend": "ollama",
+      "notes": "Very small smoke-test profile."
+    }
+  },
+  "backendDefaults": {
+    "ollama": {
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "modelField": "ollamaModel"
+    },
+    "llamacpp": {
+      "baseURL": "http://127.0.0.1:8080/v1",
+      "modelField": "profileAlias",
+      "note": "Start llama-server with --alias matching the selected profile, or set LOCAL_MODEL_ID."
+    },
+    "vllm": {
+      "baseURL": "http://127.0.0.1:8000/v1",
+      "modelField": "hfModel"
+    },
+    "lmstudio": {
+      "baseURL": "http://127.0.0.1:1234/v1",
+      "modelField": "hfModel"
+    },
+    "openai-compatible": {
+      "baseURL": "http://127.0.0.1:8000/v1",
+      "modelField": "defaultApiModel"
+    }
+  }
+}

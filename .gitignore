@@ -10,3 +10,9 @@ archive/
 .claw/sessions/
 .clawhip/
 status-help.txt
+
+# Local model runtime artifacts
+local/env.local
+models/
+*.gguf
+*.safetensors
