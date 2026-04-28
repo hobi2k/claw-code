@@ -18098,3 +18098,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Fix shape:** Add session state to session list output: `running` (agent working), `idle` (at prompt, clean tree), `idle-dirty` (at prompt, dirty worktree), `abandoned` (no recent activity, dirty tree), `completed` (task done, clean). Derive from: tmux pane activity + `git status` in worktree + last command timestamp. ~40 LOC in session listing + state classifier. Related: #314 (`claw lanes` stub indistinguishability), #319 (stale pane monitoring).
 
 **Blocker:** None — fully additive.
+
+### #321 — `cargo fmt --manifest-path rust/Cargo.toml` fails with "Failed to find targets" from repo root
+
+**Axis:** Startup friction / test brittleness
+**Evidence:** gaebal-gajae live 2026-04-28 18:18 KST; `cargo fmt --manifest-path rust/Cargo.toml` invoked from repo root failed with `Failed to find targets` (and `cargo metadata` exited with an error: `could not find Cargo.toml`). The correct invocation is `cd rust && cargo fmt`. `cargo metadata --manifest-path rust/Cargo.toml` correctly lists workspace packages but `cargo fmt` does not respect the same path in a virtual workspace context.
+
+**Gap:** The repo uses a virtual workspace layout (root `Cargo.toml` is a workspace manifest, actual crates are under `rust/`). `cargo fmt` requires being invoked from within the `rust/` directory, but the CI script and developer documentation do not surface this requirement. Operators and agents naturally attempt `--manifest-path` from repo root and get a misleading error that does not explain the `cd rust &&` workaround.
+
+**Fix shape:** Either (a) add a root-level `Makefile`/`justfile` target or wrapper script `scripts/fmt.sh` that does `cd rust && cargo fmt`, or (b) document the correct invocation in `CONTRIBUTING.md` and `CLAUDE.md` under a "Building & Formatting" section. Option (a) preferred — removes discovery friction entirely. ~5 LOC.
+
+**Blocker:** None — fully additive. Closes startup confusion documented in `74ea754` fix cycle.
