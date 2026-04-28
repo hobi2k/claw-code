@@ -18087,3 +18087,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Blocker:** None — fully additive. High priority: stale alert floods destroy operator trust in the monitoring system.
 
 **See also:** #257 (completed OMX sessions emit stale alerts) — #319 is additional live evidence strengthening the same gap via Clawhip tmux monitor specifically.
+
+### #320 — Idle/abandoned side-lanes indistinguishable from active sessions in Clawhip session list
+
+**Axis:** Event/log opacity / stale-branch confusion
+**Evidence:** gaebal-gajae live 2026-04-28 15:31 KST; three panes (`claw-code-issue-21-resumed-status-json`, `claw-code-issue-24-plugin-lifecycle-flake`, `claw-code-issue-33-xai-integration`) reported as "active sessions" by Clawhip despite being idle at shell prompt with dirty worktree changes from completed/abandoned issue lanes. No work in progress; the "active" label is misleading.
+
+**Gap:** Clawhip's session listing has no state dimension beyond tmux pane existence. `active` means "pane exists", not "agent is executing work". Abandoned sessions with dirty worktrees, completed sessions at prompt, and genuinely active working sessions all surface identically. Operators cannot distinguish which sessions need attention vs cleanup vs are mid-task without manually checking each pane.
+
+**Fix shape:** Add session state to session list output: `running` (agent working), `idle` (at prompt, clean tree), `idle-dirty` (at prompt, dirty worktree), `abandoned` (no recent activity, dirty tree), `completed` (task done, clean). Derive from: tmux pane activity + `git status` in worktree + last command timestamp. ~40 LOC in session listing + state classifier. Related: #314 (`claw lanes` stub indistinguishability), #319 (stale pane monitoring).
+
+**Blocker:** None — fully additive.
