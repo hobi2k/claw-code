@@ -18052,3 +18052,14 @@ $ grep -r "LaneEventName\|lane_events" rust/crates/ --include="*.rs"
 **Fix shape:** Wire `TransportDead` blocker → automatic recovery attempt (restart transport, re-register MCP server) OR explicit `--non-interactive` bypass that emits a structured `approval_bypassed` event instead of stalling. ~40 LOC in `recovery_recipes.rs` + `worker_boot.rs`. Additive to #200.
 
 **Blocker:** None — fully additive.
+
+### #317 — Recovered session accepts out-of-scope prompt residue (session-intent drift)
+
+**Axis:** Prompt misdelivery / session lifecycle
+**Evidence:** gaebal-gajae live `clawcode-human` 2026-04-28 14:32 KST; after MCP transport-death recovery sequence, session ingested stale OMC #2851 prompt residue unrelated to claw-code. Operator was forced to kill the dirty pane and spawn a clean lane (`claw-code-issue-1777354364-new-commits`).
+
+**Gap:** Recovered sessions (post-transport-death, post-approval-gate) have no scope/session-intent guard. Any queued or ambient prompt text can be accepted regardless of project or task context. This makes recovery indistinguishable from a fresh session start in terms of prompt acceptance policy.
+
+**Fix shape:** Add `session_scope` metadata (project dir, task ID, or explicit scope tag) to session init; validate incoming prompt against scope before acceptance post-recovery. Reject or quarantine out-of-scope prompts with a typed `OutOfScopePrompt` event. ~30 LOC in session init + prompt dispatch path. Closely related to #316 (transport-death recovery) and #300 (prompt misdelivery).
+
+**Blocker:** None — fully additive.
